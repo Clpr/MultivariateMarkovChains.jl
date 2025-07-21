@@ -1,0 +1,13 @@
+name = "MultivariateMarkovChains"
+uuid = "f6ee7e80-f154-4ab7-9ba1-93ac0b1bd6c8"
+authors = ["Clpr <zhao1tian1hao1@outlook.com> and contributors"]
+version = "0.1.0-DEV"
+
+[compat]
+julia = "1.6.7"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
