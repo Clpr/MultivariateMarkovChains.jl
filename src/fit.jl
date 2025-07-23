@@ -236,3 +236,175 @@ function fit(
     return var1
 end # fit
 
+
+
+
+
+
+
+
+# ==============================================================================
+# ESTIMTION PROCEDURE: MARKOV CHAIN
+# ==============================================================================
+"""
+    fit!(
+        mc    ::MultivariateMarkovChain,
+        xThis ::AbstractMatrix,
+        xNext ::AbstractMatrix ;
+        dims  ::Int = 1,
+    )
+
+Fit the multivariate Markov chain `mc` to the time series data `xThis` and
+`xNext`. The argument `dims` specifies how the data is arranged. If `dims = 1`,
+then each row of `xThis` and `xNext` corresponds to a period's observation of
+states.
+
+This function assumes that the states in `xThis` and `xNext` are **discrete**,
+in which the function counts the frequency of every possible state. Please be
+sure to preprocess the data to avoid too many unique states.
+
+This function uses the frequency counts to estimate the transition matrix of
+the multivariate Markov chain.
+"""
+function fit!(
+    mc    ::MultivariateMarkovChain,
+    xThis ::AbstractMatrix,
+    xNext ::AbstractMatrix ;
+    dims  ::Int = 1,
+)
+    @assert size(xThis) == size(xNext) "xThis and xNext must have the same size"
+    D = dims == 1 ? size(xThis, 2) : size(xThis, 1)
+
+    # step: counting all unique (x this, x next) pairs
+    freqs = counter(
+        eachslice(xThis,dims=dims) .=> eachslice(xNext,dims=dims)
+    )
+
+    # step: constructing the frequency matrix
+    allPairs = freqs |> keys
+    states = first.(allPairs) ∪ last.(allPairs)
+    N = length(states)
+
+    Pr = zeros(N, N)
+    for i in 1:N, j in 1:N
+        xi = states[i]
+        xj = states[j]
+        Pr[i,j] = freqs[xi => xj]
+    end
+    Pr ./= sum(Pr, dims = 2) # normalize the rows
+
+    # step: update
+    mc.N      = N
+    mc.states = states .|> SVector{D,Float64}
+    mc.Pr     = Pr
+
+    return nothing
+end # fit!
+# ------------------------------------------------------------------------------
+"""
+    fit!(
+        mc    ::MultivariateMarkovChain,
+        xPath ::AbstractMatrix ;
+        dims  ::Int = 1,
+    )
+
+Fit the multivariate Markov chain `mc` to the time series data `xPath`. The
+function updates the parameters of the multivariate Markov chain in-place.
+"""
+function fit!(
+    mc    ::MultivariateMarkovChain,
+    xPath ::AbstractMatrix ;
+    dims  ::Int = 1,
+)
+    if dims == 1
+        fit!(mc, xPath[1:end-1,:], xPath[2:end,:], dims = dims)
+    elseif dims == 2
+        fit!(mc, xPath[:,1:end-1], xPath[:,2:end], dims = dims)
+    else
+        error("dims must be either 1 or 2")
+    end
+    return nothing
+end # fit!
+# ------------------------------------------------------------------------------
+"""
+    fit(
+        xThis ::AbstractMatrix,
+        xNext ::AbstractMatrix ;
+        dims  ::Int = 1,
+    )
+
+Fit a multivariate Markov chain to the time series data `xThis` and `xNext`.
+The function returns a new multivariate Markov chain with the estimated
+parameters.
+"""
+function fit(
+    xThis ::AbstractMatrix,
+    xNext ::AbstractMatrix ;
+    dims  ::Int = 1,
+)
+    D = dims == 1 ? size(xThis, 2) : size(xThis, 1)
+
+    # create a new MultivariateMarkovChain of the same state dimensionality
+    mc = MultivariateMarkovChain(
+        [Vector{Float64}(undef,D),],
+        ones(1,1),
+        normalize = true,
+        validate = true,
+    )
+    fit!(mc, xThis, xNext, dims = dims)
+    return mc
+end # fit!
+# ------------------------------------------------------------------------------
+"""
+    fit(
+        xPath ::AbstractMatrix ;
+        dims  ::Int = 1,
+    )
+
+Fit a multivariate Markov chain to the time series data `xPath`.
+"""
+function fit(
+    xPath ::AbstractMatrix ;
+    dims  ::Int = 1,
+)
+    return fit(xPath[1:end-1,:], xPath[2:end,:], dims = dims)
+end # fit!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
