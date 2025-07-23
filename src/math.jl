@@ -122,11 +122,11 @@ The `xGrid` must be a unique vector but not necessarily sorted.
 function gridize(
     Xs   ::AbstractVector{M}, 
     xGrid::AbstractVector{N}
-)::Vector{Int} where {N<:Real, M<:Real}
+)::Vector where {N<:Real, M<:Real}
     @assert length(xGrid) > 0 "xGrid must have at least one element"
     @assert all(unique(xGrid) .== xGrid) "xGrid must be unique"
 
-    return getindex.(argmin(abs.(Xs .- xGrid'), dims = 2), 2)
+    return getindex.(argmin(abs.(Xs .- xGrid'), dims = 2) |> vec, 2)
 end
 # ------------------------------------------------------------------------------
 """
