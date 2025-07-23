@@ -18,7 +18,9 @@ include("ar1.jl") # AR(1) & VAR(1) process representations
 
 include("mc.jl") # multivariate Markov chain representation
 
-include("estimation.jl") # construct multivariate Markov chains from data
+include("fit.jl") # construct multivariate Markov chains from data
+
+include("approx.jl") # approximate multivariate Markov chains from AR(1)/VAR(1)
 
 
 end # MultivariateMarkovChains
