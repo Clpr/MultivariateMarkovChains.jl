@@ -76,6 +76,11 @@ simulated_path = rand(ar1, 100) # simulate 100 steps with default x0
 simulated_path = rand(ar1, 100, x0 = 1.0)
 simulated_path = rand(ar1, 100, seed = 123) # specify random seed
 
+# MANUPULATION -----------------------------------------------------------------
+
+copy(ar1)
+deepcopy(ar1)
+
 ```
 
 ### VAR(1) process
@@ -154,6 +159,12 @@ shocks = rand(mmc.dst.MvNormal(ar1.Σ), 100) # draw from the correct distributio
 
 simulated_path = rand(ar1, shocks)
 simulated_path = rand(ar1, shocks, x0 = rand(4)) # specify initial value
+
+
+# MANUPULATION -----------------------------------------------------------------
+
+copy(ar1)
+deepcopy(ar1)
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -239,6 +250,9 @@ mc.states
 # transition matrix
 mc.Pr
 
+# copy & deepcopy
+copy(mc)
+deepcopy(mc)
 
 # META INFORMATION -------------------------------------------------------------
 

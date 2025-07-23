@@ -82,6 +82,11 @@ simulated_path = rand(ar1, 100) # simulate 100 steps with default x0
 simulated_path = rand(ar1, 100, x0 = 1.0)
 simulated_path = rand(ar1, 100, seed = 123) # specify random seed
 
+# MANUPULATION -----------------------------------------------------------------
+
+copy(ar1)
+deepcopy(ar1)
+
 ```
 """
 Base.@kwdef mutable struct AR1
@@ -90,6 +95,24 @@ Base.@kwdef mutable struct AR1
     xavg::Float64 = 0.0          # Long-term average value
     σ   ::Float64 = 1.0          # Standard deviation of the innovation shock
 end # AR1
+# ------------------------------------------------------------------------------
+function Base.copy(ar1::AR1)
+    return AR1(
+        x0  = ar1.x0 |> copy,
+        ρ   = ar1.ρ |> copy,
+        xavg= ar1.xavg |> copy,
+        σ   = ar1.σ |> copy,
+    )
+end # copy
+# ------------------------------------------------------------------------------
+function Base.deepcopy(ar1::AR1)
+    return AR1(
+        x0  = ar1.x0 |> deepcopy,
+        ρ   = ar1.ρ |> deepcopy,
+        xavg= ar1.xavg |> deepcopy,
+        σ   = ar1.σ |> deepcopy,
+    )
+end # deepcopy
 # ------------------------------------------------------------------------------
 function Base.show(io::IO, ar1::AR1)
     println(io, "AR(1) Process:")
@@ -296,6 +319,12 @@ simulated_path = rand(ar1, shocks)
 simulated_path = rand(ar1, shocks, x0 = rand(4)) # specify initial value
 
 
+# MANUPULATION -----------------------------------------------------------------
+
+copy(ar1)
+deepcopy(ar1)
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Merging operations
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -354,6 +383,24 @@ mutable struct VAR1{D}
         )
     end
 end # VAR1
+# ------------------------------------------------------------------------------
+function Base.copy(var1::VAR1{D}) where {D}
+    return VAR1{D}(
+        x0   = copy(var1.x0),
+        ρ    = copy(var1.ρ),
+        xavg = copy(var1.xavg),
+        Σ    = copy(var1.Σ),
+    )
+end # copy
+# ------------------------------------------------------------------------------
+function Base.deepcopy(var1::VAR1{D}) where {D}
+    return VAR1{D}(
+        x0   = deepcopy(var1.x0),
+        ρ    = deepcopy(var1.ρ),
+        xavg = deepcopy(var1.xavg),
+        Σ    = deepcopy(var1.Σ),
+    )
+end # deepcopy
 # ------------------------------------------------------------------------------
 function Base.show(io::IO, var1::VAR1{D}) where {D}
     println(io, "VAR(1) Process of dimension $D:")

@@ -58,6 +58,10 @@ mc.states
 # transition matrix
 mc.Pr
 
+# copy & deepcopy
+copy(mc)
+deepcopy(mc)
+
 
 # META INFORMATION -------------------------------------------------------------
 
@@ -160,6 +164,24 @@ mutable struct MultivariateMarkovChain{D}
         )
     end
 end # MultivariateMarkovChain{D}
+# ------------------------------------------------------------------------------
+function Base.copy(mc::MultivariateMarkovChain{D}) where {D}
+    return MultivariateMarkovChain(
+        copy(mc.states),
+        copy(mc.Pr),
+        validate = false, # no need to validate again
+        normalize = false,
+    )
+end # copy
+# ------------------------------------------------------------------------------
+function Base.deepcopy(mc::MultivariateMarkovChain{D}) where {D}
+    return MultivariateMarkovChain(
+        deepcopy(mc.states),
+        deepcopy(mc.Pr),
+        validate = false, # no need to validate again
+        normalize = false,
+    )
+end # deepcopy
 # ------------------------------------------------------------------------------
 function Base.show(io::IO, mc::MultivariateMarkovChain{D}) where {D}
     println(io, "MultivariateMarkovChain with $(mc.N) states of dimension $D:")
