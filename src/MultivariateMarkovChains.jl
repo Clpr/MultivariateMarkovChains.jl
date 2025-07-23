@@ -6,6 +6,7 @@ import Statistics
 import Random: MersenneTwister
 
 using  StaticArrays             # for VAR1{D}
+using  DataStructures           # for constructing the Markov chains
 import MultivariateStats as mvs # for estimation
 import SplitApplyCombine as sac # for convenient data manipulation
 import Distributions as dst     # for VAR1{D} covariance structure
