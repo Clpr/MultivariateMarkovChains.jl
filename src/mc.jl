@@ -30,7 +30,7 @@ import MultivariateMarkovChains as mmc
 
 # INITIALIZATION ---------------------------------------------------------------
 
-# define a multivariate Markov chain with 3 states in 2D
+# define a multivariate Markov chain with 2 states in 2D
 states = [
     [1.0, 2.0],
     [3.0, 4.0],
@@ -115,7 +115,7 @@ mc_univariate = split(mc)
 # ANALYSIS ---------------------------------------------------------------------
 
 # solves the stationary distribution
-ss = stationary(mc)
+ss = mmc.stationary(mc)
 
 # computes the long-term mean of the states
 Statistics.mean(mc)
