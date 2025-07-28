@@ -122,12 +122,55 @@ The `xGrid` must be a unique vector but not necessarily sorted.
 function gridize(
     Xs   ::AbstractVector{M}, 
     xGrid::AbstractVector{N}
-)::Vector where {N<:Real, M<:Real}
-    @assert length(xGrid) > 0 "xGrid must have at least one element"
-    @assert all(unique(xGrid) .== xGrid) "xGrid must be unique"
+)::Vector{Int} where {N<:Real, M<:Real}
+    @assert length(xGrid) > 0 "Grids must have at least one element"
+    @assert all(unique(xGrid) .== xGrid) "All grids must be unique"
 
     return getindex.(argmin(abs.(Xs .- xGrid'), dims = 2) |> vec, 2)
 end
+# ------------------------------------------------------------------------------
+"""
+    gridize(
+        Xs    ::Vector{<:AbstractVector},
+        xGrids::Vector{<:AbstractVector},
+    )::Tuple{Vector{Vector{Float64}},Vector{Vector{Int}}}
+
+Given a vector of D-dimensional points stored in `Xs`, and a D-element vector 
+of grids `xGrids`, the function maps each point in `Xs` to the nearest grid 
+point in each dimension. The function returns two vectors of D-vectors, where 
+each vector corresponds to the values of the nearest grid points in each 
+dimension for the corresponding point in `Xs`, and the indices of these points.
+"""
+function gridize(
+    Xs    ::Vector{<:AbstractVector},
+    xGrids::Vector{<:AbstractVector},
+)::Tuple{Vector{Vector{Float64}},Vector{Vector{Int}}}
+    @assert length(Xs) > 0 "Xs must not be empty"
+    @assert length(xGrids) > 0 "xGrids must not be empty"
+    D = length(xGrids)
+    @assert all(length.(Xs) .== D) "elements of Xs mismatch with the grids"
+    @assert all(length.(xGrids) .> 0) "All grid must have at least one element"
+    @assert all(unique.(xGrids) .== xGrids) "All grids must be unique"
+
+    valNew = Vector{Vector{Float64}}(undef, length(Xs))
+    idxNew = Vector{Vector{Int}}(undef, length(Xs))
+    for (i, x) in enumerate(Xs)
+        val = Vector{Float64}(undef, D)
+        idx = Vector{Int}(undef, D)
+        for d in 1:D
+            res = (x[d] .- xGrids[d]) .|> abs |> findmin
+            val[d] = xGrids[d][res[2]]
+            idx[d] = res[2]
+        end
+        valNew[i] = val
+        idxNew[i] = idx
+    end
+    return (valNew, idxNew)
+end
+
+
+
+
 # ------------------------------------------------------------------------------
 """
     isstationary(A::AbstractMatrix)::Bool
@@ -205,15 +248,15 @@ function tauchen(
     trProbM = zeros(N, N)
     for iRow in 1:N
         # do end points first
-        trProbM[iRow,1] = normcdf((y[1] - ρ*y[iRow] + d/2) / σ)
-        trProbM[iRow,N] = 1 - normcdf((y[N] - ρ*y[iRow] - d/2) / σ)
+        trProbM[iRow,1] = sf.normcdf((y[1] - ρ*y[iRow] + d/2) / σ)
+        trProbM[iRow,N] = 1 - sf.normcdf((y[N] - ρ*y[iRow] - d/2) / σ)
 
         # fill the middle columns
         for iCol = 2:N-1
 
             trProbM[iRow,iCol] = (
-                normcdf((y[iCol] - ρ*y[iRow] + d/2) / σ) -
-                normcdf((y[iCol] - ρ*y[iRow] - d/2) / σ)
+                sf.normcdf((y[iCol] - ρ*y[iRow] + d/2) / σ) -
+                sf.normcdf((y[iCol] - ρ*y[iRow] - d/2) / σ)
             )
 
         end # iCol
