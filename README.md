@@ -40,7 +40,7 @@ import MultivariateMarkovChains as mmc
 
 # INITIALIZATION ---------------------------------------------------------------
 
-# define a multivariate Markov chain with 3 states in 2D
+# define a multivariate Markov chain with 2 states in 2D
 states = [
     [1.0, 2.0],
     [3.0, 4.0],
@@ -124,7 +124,7 @@ mc_univariate = split(mc)
 # ANALYSIS ---------------------------------------------------------------------
 
 # solves the stationary distribution
-ss = stationary(mc)
+ss = mmc.stationary(mc)
 
 # computes the long-term mean of the states
 Statistics.mean(mc)
@@ -321,6 +321,128 @@ merged_proc = merge(proc3, proc3)
 
 
 
+### Converting one process to another
+
+Beyond direct parameter estimation, `MultivariateMarkovChain` objects can be constructed from other processes using discretization algorithms:
+
+**From AR(1) processes:**
+
+- Tauchen (1986) method
+- Rouwenhorst (1995) method *(not yet implemented)*
+
+**From VAR(1) processes:**
+
+- Modified Rouwenhorst method *(not yet implemented)*
+
+**From continuous state mappings:**
+
+- Young (2010) non-stochastic simulation
+- Gridization + frequency count (check the estimation section for `fit!()`)
+
+
+```julia
+import MultivariateMarkovChains as mmc
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Tauchen (1986)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ar1 = mmc.AR1(ρ = 0.9, xavg = 10.0, σ = 0.1)
+
+# style 1: OOP, returns a `MultivariateMarkovChain`
+mmc.tauchen(
+    ar1,
+    5, # number of discretized states
+    nσ = 2.5, # spanning how many standard deviation around the mean
+)
+
+# style 2: generic, returns a NamedTuple of `states` and `probs`
+mmc.tauchen(
+    5, # number of discretized states
+    ar1.ρ, # persistence
+    ar1.σ, # standard deviation
+    yMean = ar1.xavg, # mean
+    nσ = 2.5, # spanning how many standard deviation around the mean
+)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Young (2010) non-stochastic simulation
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# an example 2-D operator mapping continuous vector states to the same space
+# e.g. consider [0,1]^2 space for simplicity
+# e.g. do flipping around (0.5,0.5) for example
+f2fit(X) = clamp.([1.0 - X[1], 1.0 - X[2]], 0.0, 1.0)
+
+# design grids for discretizing the continuous state space
+grids = [
+    LinRange(0,1,11), # 11 points in the first dimension
+    LinRange(0,1,21), # 21 points in the second dimension
+]
+
+# style 1: let the package do the work
+# returns a `MultivariateMarkovChain{2}` with 11*21 = 231 states
+mc = mmc.young(
+    f2fit, # the operator mapping
+    grids, # the grids for discretization
+)
+
+# style 2: break down the steps and control more details
+# returns a NamedTuple of `states` and `probs` which can be used to construct 
+# a `MultivariateMarkovChain`
+
+# step 2.1: evaluate the operator for every grid point, Cartesian/tensor joined
+# and stack the results for convenience
+Xthis = Iterators.product(grids...) |> collect .|> collect |> vec
+Xnext = [f2fit(xy) for xy in Xthis] |> stack
+
+# step 2.2: gridize/snap the next states to the grids; each dimension has its own grid
+Xnext_gridized = [
+    [x1,x2]
+    for (x1,x2) in zip(
+        grids[1][mmc.gridize(Xnext[1,:], grids[1])],
+        grids[2][mmc.gridize(Xnext[2,:], grids[2])],
+    )
+]
+
+# step 2.3: count the frequency of state transitions
+# tips: use DataStructures.Counter
+freqs = mmc.DataStructures.counter(Xthis .=> Xnext_gridized)
+
+# step 2.4: construct the transition probability matrix
+Pr = Float64[
+    freqs[xi => xj]
+    for (xi,xj) in Iterators.product(Xthis,Xthis)
+]
+# Pr |> mmc.sparse # (optional) check the sparsity pattern
+Pr ./= sum(Pr, dims = 2) # normalize the rows to sum to 1
+
+
+# step 2.5: construct the `MultivariateMarkovChain`
+mc = mmc.MultivariateMarkovChain(
+    Xthis, # the states
+    Pr,    # the transition probability matrix
+    validate  = true, # validate the transition probabilities
+    normalize = true, # normalize the rows to sum to 1
+)
+
+# Then, if the mapping `f2fit` is stochastic, one should merge the constructed
+# `MultivariateMarkovChain` with the Markov chain of the stochastic states.
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Estimating the processes from observational data
 
@@ -331,6 +453,78 @@ While this package primarily focuses on data structures and model representation
 import MultivariateMarkovChains as mmc
 using Statistics
 
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Frequency counting estimation of Multivariate Markov Chains
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Example data: already gridized -----------------------------------------------
+xPath = stack(
+    rand(
+        [[1,1], [1,2], [2,1], [2,2]], 
+        100
+    ),
+    dims = 1
+)
+xThis = xPath[1:end-1,:]
+xNext = xPath[2:end,:]
+
+
+mc = mmc.MultivariateMarkovChain(
+    [[1,1],[1,2],[1,3]],  # just init something for updating, but the dimensionality should match
+    rand(3,3),
+    normalize = true,
+)
+
+
+mmc.fit!(mc, xThis, xNext, dims = 1) # `dims = 1` indicates that each row is an observation
+mmc.fit!(mc, xThis', xNext', dims = 2)
+mmc.fit!(mc, xPath, dims = 1) # the whole time series, the order matters
+
+sum(mc.Pr, dims = 2) |> display # check the row sums
+
+
+mc1 = mmc.fit(xThis, xNext, dims = 1) # fit a new Markov chain
+mc2 = mmc.fit(xPath, dims = 1) # fit a new Markov chain
+
+
+
+# Example data: not gridized ---------------------------------------------------
+xPathContinuous = rand(100, 2)
+
+# you may use `mmc.gridize` to gridize the data with a discrete grid
+# out-of-grid data will be mapped to the nearest grid point
+
+# usage 1 (gridize a vector)
+mmc.gridize(rand(20), 0.0:0.1:1.0)
+
+# usage 2 (gridize each row/column of a matrix)
+# specify the grid for each row/column
+# one can `stack` the returned vectors to a gridized matrix
+mmc.gridize.(
+    rand(100000,10) |> eachcol,
+    [
+        0.0:0.1:1.0
+        for _ in 1:10
+    ]
+)
+
+# now, let's gridize the non-gridized data
+xPath = mmc.gridize.(
+    xPathContinuous |> eachcol,
+    [
+        [0.0, 0.5, 1.0], # grid for the 1st dimension
+        0.0:0.2:1.0    ,  # grid for the 2nd dimension
+    ]
+) |> stack
+
+# then, we can fit a multivariate Markov chain
+mc = mmc.fit(xPath, dims = 1)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# OLS estimation of AR(1) processes
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 proc1 = mmc.AR1(ρ = 0.9, xavg = 0.0, σ = 0.1)
 proc2 = mmc.AR1(ρ = 0.8, xavg = 1.0, σ = 0.2)
@@ -345,10 +539,6 @@ proc3 = mmc.VAR1{3}(
     ]
 )
 
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# OLS estimation of AR(1) processes
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # sample an AR(1) data path
 xData = let T = 200
@@ -417,13 +607,17 @@ mmc.fit!(
     x0 = zeros(3),
     dims = 2,
 )
+
 ```
 
 
 
 
 
-### Converting one process to another
+
+
+
+
 
 
 

@@ -9,7 +9,7 @@ mmc = include("../src/MultivariateMarkovChains.jl")
 
 # INITIALIZATION ---------------------------------------------------------------
 
-# define a multivariate Markov chain with 3 states in 2D
+# define a multivariate Markov chain with 2 states in 2D
 states = [
     [1.0, 2.0],
     [3.0, 4.0],
