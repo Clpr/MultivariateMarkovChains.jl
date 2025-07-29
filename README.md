@@ -115,10 +115,6 @@ stack(mc3)
 # e.g. states [[1.0,3.0],[2.0,3.0]] --> [1.0,2.0] and [3.0,]
 unique(mc)
 
-# split the multivariate Markov chain into `D` independent univariate chains
-# overloads `Base.split`
-mc_univariate = split(mc)
-
 
 
 # ANALYSIS ---------------------------------------------------------------------
