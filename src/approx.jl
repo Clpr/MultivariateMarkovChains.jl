@@ -114,60 +114,6 @@ end # young
 # ------------------------------------------------------------------------------
 """
     young(
-        nextstates::Array{<:AbstractVector},
-        grids::Vector{<:AbstractVector};
-    )::MultivariateMarkovChain
-
-Discretizes a continuous state mapping over the Cartesian product of `grids`, 
-using Young (2010) non-stochastic simulation method.
-
-Returns a `MultivariateMarkovChain{D}` where `D=length(grids)` is the dimension
-of the state space. The `nextstates` is a `D`-dimensional array where each
-element is a vector representing the next state for each grid point.
-
-Note: if you need to model a controlled Markov process (X,Z) where Z is totally
-exogenous and X's transition depends on (X,Z) simultaneously, then the current
-API works if you manually provide the `nextstates` array properly. Otherwise,
-you may want to check out another `young(f,Zproc,xgrids)` API for convenience.
-
-## Notes
-- If there are states in `nextstates` but not in the tensor/Cartesian grid 
-constructed by `grids`, then they will be ignored.
-"""
-function young(
-    nextstates::Array{<:AbstractVector},
-    grids::Vector{<:AbstractVector};
-)::MultivariateMarkovChain
-
-    D = length(grids)
-    @assert D > 0 "Grids must be non-empty."
-
-    # step 1: construct the Cartesian space
-    Xthis = Iterators.product(grids...) |> collect .|> collect |> vec
-
-    gridSize = size(Xthis)
-    @assert size(nextstates) == gridSize "Next states must match the grid size."
-
-    # step 2: count the frequency of state transitions
-    freqs = DataStructures.counter(Xthis .=> nextstates)
-
-    # step 3: construct the transition matrix
-    Pr = Float64[
-        freqs[xi => xj]
-        for (xi,xj) in Iterators.product(Xthis,Xthis)
-    ]
-    Pr ./= sum(Pr, dims = 2) # row-wise normalize
-
-    return MultivariateMarkovChain(
-        Xthis,
-        Pr,
-        validate  = true,
-        normalize = true,
-    )
-end # young
-# ------------------------------------------------------------------------------
-"""
-    young(
         fxz   ::Function,
         Zproc ::MultivariateMarkovChain,
         xgrids::Vector{<:AbstractVector}
