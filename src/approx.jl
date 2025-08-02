@@ -220,8 +220,8 @@ Zproc = mmc.MultivariateMarkovChain(
 
 # define endogenous/controlled states X = (x1,x2), x1 ∈ [0,2], x2 ∈ [0,10]
 xgrids = [
-    LinRange(0,2,10),
-    LinRange(0,10,10),
+    LinRange(0,2,30),
+    LinRange(0,10,30),
 ]
 
 # define a mapping X' = f(X,Z); use sqrt for simplicity
@@ -282,7 +282,6 @@ function young(
     # check: dimensionality
     Nx = length(xgrids)
     Nz = ndims(Zproc)
-    Ny = Nx + Nz
     @assert Nx > 0 "X grids must be non-empty."
     @assert Nz > 0 "Z process must be non-empty."
 
@@ -305,11 +304,11 @@ function young(
     # step: collect the state space for Y = (X,Z), and make the indexing mats
     Xtensor = Iterators.product(xgrids...)
     Ytensor = Iterators.product(Xtensor, Zproc.states)
+    XZsub   = CartesianIndices((Dx,Dz))
     Xind    = LinearIndices(ntuple(
         i -> length(xgrids[i]),
         length(xgrids)
     ))
-    XZsub   = CartesianIndices((Dx,Dz))
     
 
     # step: fill the malloc-ed
