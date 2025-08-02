@@ -382,6 +382,7 @@ mmc.tauchen(
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Young (2010) non-stochastic simulation
+# Case 1: approximating a deterministic mapping X' = f(X) with a Markov Chain
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # an example 2-D operator mapping continuous vector states to the same space
@@ -402,47 +403,39 @@ mc = mmc.young(
     grids, # the grids for discretization
 )
 
-# style 2: break down the steps and control more details
-# returns a NamedTuple of `states` and `probs` which can be used to construct 
-# a `MultivariateMarkovChain`
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Young (2010) non-stochastic simulation
+# Case 2: approximating a controlled Markov process Y = (X,Z) where
+# X' = f(X,Z)
+# Z' ~ MarkovChain(Z)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# step 2.1: evaluate the operator for every grid point, Cartesian/tensor joined
-# and stack the results for convenience
-Xthis = Iterators.product(grids...) |> collect .|> collect |> vec
-Xnext = [f2fit(xy) for xy in Xthis] |> stack
-
-# step 2.2: gridize/snap the next states to the grids; each dimension has its own grid
-Xnext_gridized = [
-    [x1,x2]
-    for (x1,x2) in zip(
-        grids[1][mmc.gridize(Xnext[1,:], grids[1])],
-        grids[2][mmc.gridize(Xnext[2,:], grids[2])],
-    )
-]
-
-# step 2.3: count the frequency of state transitions
-# tips: use DataStructures.Counter
-freqs = mmc.DataStructures.counter(Xthis .=> Xnext_gridized)
-
-# step 2.4: construct the transition probability matrix
-Pr = Float64[
-    freqs[xi => xj]
-    for (xi,xj) in Iterators.product(Xthis,Xthis)
-]
-# Pr |> mmc.sparse # (optional) check the sparsity pattern
-Pr ./= sum(Pr, dims = 2) # normalize the rows to sum to 1
-
-
-# step 2.5: construct the `MultivariateMarkovChain`
-mc = mmc.MultivariateMarkovChain(
-    Xthis, # the states
-    Pr,    # the transition probability matrix
-    validate  = true, # validate the transition probabilities
-    normalize = true, # normalize the rows to sum to 1
+# define exognous process Z
+Zproc = mmc.MultivariateMarkovChain(
+    [[1,1],[2,1],[1,2],[2,2]],
+    [
+        0.81  0.09  0.09  0.01;
+        0.09  0.81  0.01  0.09;
+        0.09  0.01  0.81  0.09;
+        0.01  0.09  0.09  0.81;
+    ]
 )
 
-# Then, if the mapping `f2fit` is stochastic, one should merge the constructed
-# `MultivariateMarkovChain` with the Markov chain of the stochastic states.
+# define endogenous/controlled states X = (x1,x2), x1 ∈ [0,2], x2 ∈ [0,10]
+xgrids = [
+    LinRange(0,2,30),
+    LinRange(0,10,30),
+]
+
+# define a mapping X' = f(X,Z); use sqrt for simplicity
+fxz(X,Z) = begin
+    x1p = clamp(sqrt(X[1]*Z[1]), 0, 2)
+    x2p = clamp(sqrt(X[2]*Z[2]), 0, 10)
+    return [x1p, x2p]
+end
+
+# Run Young's algorithm
+mc_Y = mmc.young(fxz, Zproc, xgrids)
 
 
 ```
