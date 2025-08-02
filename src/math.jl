@@ -216,7 +216,15 @@ is `Pr`. The function uses the eigenvalue decomposition. The function returns
 a vector of probabilities.
 """
 function stationary(Pr::AbstractMatrix)::Vector{Float64}
-    λ, V = eigen(Pr')
+    if issparse(Pr) && (size(Pr,1) > 10000)
+        error(string(
+            "The transition matrix is too large to compute the stationary ",
+            "distribution using eigenvalue decomposition. Consider using a ",
+            "different method or reducing the size of the matrix."
+        ))
+    end
+
+    λ, V = eigen(issparse(Pr) ? transpose(Matrix(Pr)) : transpose(Pr))
     i    = argmin(abs.(λ .- 1))
     pss  = V[:,i] ./ sum(V[:,i])
     return pss .|> real
