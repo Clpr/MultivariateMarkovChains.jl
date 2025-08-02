@@ -59,6 +59,25 @@ mc = mmc.MultivariateMarkovChain(states, Pr, validate = true)
 # rowwise-normalize `Pr` to ensure it is a valid transition matrix
 mc = mmc.MultivariateMarkovChain(states, rand(2,2), normalize = true)
 
+# the transition matrix can be sparse for many-state Markov chains
+mmc.MultivariateMarkovChain(
+    states,
+    mmc.sparse([
+        1.0 0.0;
+        0.0 1.0
+    ]),
+)
+
+# or, sparsify the transition matrix
+mmc.MultivariateMarkovChain(
+    states, 
+    [
+        1.0 0.0;
+        0.0 1.0
+    ], 
+    sparsify = true,
+)
+
 
 # ACCESS -----------------------------------------------------------------------
 

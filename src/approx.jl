@@ -68,6 +68,10 @@ transition probabilities.
 Note: the mapping should map the state space to itself. All outsider predictions
 will be mapped to the nearest grid point.
 
+Note: if you need to model a controlled Markov process (X,Z) where Z is totally
+exogenous and X's transition depends on (X,Z) simultaneously, then you may want
+to check out another `young(f,Zproc,xgrids)` API.
+
 ## Reference
 
 Young, Eric R. “Solving the Incomplete Markets Model with Aggregate Uncertainty 
@@ -121,6 +125,11 @@ Returns a `MultivariateMarkovChain{D}` where `D=length(grids)` is the dimension
 of the state space. The `nextstates` is a `D`-dimensional array where each
 element is a vector representing the next state for each grid point.
 
+Note: if you need to model a controlled Markov process (X,Z) where Z is totally
+exogenous and X's transition depends on (X,Z) simultaneously, then the current
+API works if you manually provide the `nextstates` array properly. Otherwise,
+you may want to check out another `young(f,Zproc,xgrids)` API for convenience.
+
 ## Notes
 - If there are states in `nextstates` but not in the tensor/Cartesian grid 
 constructed by `grids`, then they will be ignored.
@@ -156,13 +165,39 @@ function young(
         normalize = true,
     )
 end # young
+# ------------------------------------------------------------------------------
+"""
+    young(
+        fxz   ::Function,
+        Zproc ::MultivariateMarkovChain,
+        xgrids::Vector{<:AbstractVector}
+    )::MultivariateMarkovChain
+
+Approximate a controlled Markov process (X,Z) where Z is totally exogenous
+and X's transition depends on (X,Z) simultaneously, using Young (2010) 
+non-stochastic simulation method.
+
+The function receivs a function `fxz(X,Z)` that receives two vectors of X and Z
+respectively; a `Zproc` which is a `MultivariateMarkovChain` representing
+the exogenous process Z; and a vector of grids `xgrids` for how to discretize X.
+
+Returns a `MultivariateMarkovChain` representing the controlled process (X,Z).
+The states are the Cartesian product of `xgrids` and the states of `Zproc`.
+The transition probabilities are computed based on the mapping `fxz` applied to
+the states of (X,Z).
+
+"""
+function young(
+    fxz   ::Function,
+    Zproc ::MultivariateMarkovChain,
+    xgrids::Vector{<:AbstractVector}
+)::MultivariateMarkovChain
 
 
 
 
 
-
-
+end # young
 
 
 

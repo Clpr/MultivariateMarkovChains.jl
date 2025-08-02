@@ -49,6 +49,25 @@ mc = mmc.MultivariateMarkovChain(states, Pr, validate = true)
 # rowwise-normalize `Pr` to ensure it is a valid transition matrix
 mc = mmc.MultivariateMarkovChain(states, rand(2,2), normalize = true)
 
+# the transition matrix can be sparse for many-state Markov chains
+mmc.MultivariateMarkovChain(
+    states,
+    mmc.sparse([
+        1.0 0.0;
+        0.0 1.0
+    ]),
+)
+
+# or, sparsify the transition matrix
+mmc.MultivariateMarkovChain(
+    states, 
+    [
+        1.0 0.0;
+        0.0 1.0
+    ], 
+    sparsify = true,
+)
+
 
 # ACCESS -----------------------------------------------------------------------
 
@@ -131,13 +150,14 @@ mutable struct MultivariateMarkovChain{D}
     states::Vector{StaticVector{D,Float64}}
 
     # transition matrix, as a N x N matrix
-    Pr::Matrix{Float64}
+    Pr::Union{Matrix{Float64},SparseMatrixCSC{Float64}}
 
     function MultivariateMarkovChain(
         states   ::AbstractVector, 
-        Pr       ::Matrix{Float64} ;
+        Pr       ::Union{Matrix{Float64},SparseMatrixCSC{Float64}} ;
         validate ::Bool = true,
         normalize::Bool = true,
+        sparsify ::Bool = false,
     )
         N = length(states)
         D = length(states[1])
@@ -160,7 +180,7 @@ mutable struct MultivariateMarkovChain{D}
         new{D}(
             N,
             states .|> SVector{D,Float64},
-            Pr
+            (!issparse(Pr)) && sparsify ? sparse(Pr) : Pr
         )
     end
 end # MultivariateMarkovChain{D}
@@ -278,26 +298,17 @@ elements of the two Markov chains respectively.
 """
 function Base.merge(
     mc1::MultivariateMarkovChain{D}, 
-    mc2::MultivariateMarkovChain{M}
+    mc2::MultivariateMarkovChain{M};
 ) where {D,M}
-    N2     = mc1.N * mc2.N
-    states = Vector{Vector{Float64}}(undef, N2)
-    Pr     = Matrix{Float64}(undef, N2, N2)
 
-    linidx = LinearIndices((1:mc1.N, 1:mc2.N))
+    @assert D > 0 && M > 0 "Both Markov chains must have positive dimensions"
 
-    for ix in 1:mc1.N, iy in 1:mc2.N
-        x    = mc1.states[ix]
-        y    = mc2.states[iy]
-        irow = linidx[ix,iy]
+    states = [
+        Float64[x; y]
+        for (x,y) in Iterators.product(mc1.states, mc2.states)
+    ] |> vec
 
-        states[irow] = Float64[x; y]
-
-        for jx in 1:mc1.N, jy in 1:mc2.N
-            jcol = linidx[jx,jy]
-            Pr[irow, jcol] = mc1.Pr[ix, jx] * mc2.Pr[iy, jy]
-        end # (jx,jy)
-    end # (ix,iy)
+    Pr = kron(mc2.Pr, mc1.Pr)
 
     return MultivariateMarkovChain(
         states, Pr,

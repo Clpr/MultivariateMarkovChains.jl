@@ -62,7 +62,7 @@ function locate(x::Real, xsorted::AbstractVector)::NTuple{2,Int}
 end
 # ------------------------------------------------------------------------------
 """
-    inv_discrete_distribution(pr::Real, probs::Vector{Float64})::Int
+    inv_discrete_distribution(pr::Real, probs::AbstractVector{Float64})::Int
 
 Inverse discrete distribution function. Given a probability `pr` and a
 discrete distribution `probs`, this function returns the index of the first
@@ -70,7 +70,10 @@ cumulative probability that is greater than or equal to `pr`. The `probs`
 must be a vector of probabilities that sum to 1.0, and `pr` must be in the
 range [0, 1].
 """
-function inv_discrete_distribution(pr::Real, probs::Vector{Float64})::Int
+function inv_discrete_distribution(
+    pr   ::Real, 
+    probs::AbstractVector{Float64}
+)::Int
     @assert (0.0 <= pr <= 1.0) "pr must be in the range [0, 1]"
     @assert isapprox(sum(probs), 1.0, atol=1e-4) "probs must sum to 1.0 at 1E-4"
 
@@ -192,8 +195,6 @@ end
 
 
 
-
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Discretization helpers
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -278,18 +279,6 @@ end # tauchen
 
 
 
-
-
-
-
-
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Young (2010) deterministic simulation method
-# 
-# Young, Eric R. "Solving the incomplete markets model with aggregate 
-# uncertainty using the Krusell–Smith algorithm and non-stochastic simulations."
-# Journal of Economic Dynamics and Control 34, no. 1 (2010): 36-41.
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
