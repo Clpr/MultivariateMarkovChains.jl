@@ -20,6 +20,26 @@ function issquare(m::AbstractMatrix)::Bool
 end
 # ------------------------------------------------------------------------------
 """
+    ongrid(
+        x    ::AbstractVector{<:Real}, 
+        grids::Vector{<:AbstractVector{<:Real}}
+    )::Bool
+
+Check if a point `x` is on-grid with respect to the grids defined in `grids`.
+Each vector in `grids` represents the grid points for the corresponding 
+dimension of `x`. The function returns `true` if `x` is on-grid, meaning
+that each element of `x` is exactly equal to one of the grid points in the
+corresponding dimension of `grids`. Otherwise, it returns `false`.
+"""
+function ongrid(
+    x    ::AbstractVector{<:Real}, 
+    grids::Vector{<:AbstractVector{<:Real}}
+)::Bool
+    # check if a point x is on-grid with respect to the grids
+    return all(x .∈ grids)
+end
+# ------------------------------------------------------------------------------
+"""
     locate(x::Real, xsorted::AbstractVector) -> NTuple{2,Int}
 
 Finds the indices of the two neighboring elements in the sorted vector `xsorted`
@@ -36,6 +56,7 @@ that bound the value `x`.
 
 # Notes
 - Assumes `x >= xsorted[1] && x <= xsorted[end]`; no validation is performed.
+- Assumes `xsorted` is sorted in ascending order and unique.
 - Useful for interpolation or binning tasks where the position of `x` relative 
 to `xsorted` is needed.
 """
@@ -59,6 +80,100 @@ function locate(x::Real, xsorted::AbstractVector)::NTuple{2,Int}
     i2 = searchsortedfirst(xsorted, x)
 
     return (i1, i2)
+end
+# ------------------------------------------------------------------------------
+"""
+    neighbors_2combination(
+        x    ::AbstractVector{<:Real},
+        grids::Vector{<:AbstractVector{<:Real}},
+    )
+
+Finds all the on-grid neighbors for D-dimensional point `x` given the grids
+defined in `grids`. Each vector in `grids` represents the grid points for
+the corresponding dimension of `x`.
+
+The function returns a `::Vector{Tuple{Vararg{Int}}}`: a vector of tuples, where
+each inner tuple represents an on-grid neighbor point. An inner tuple has total
+D-elements that represents the indices of the nearest grid points in each
+dimension of `x`.
+
+The function can return at most 2^D neighbors (if no dimension of `x` locates at
+a grid point of `grids` exactly); and can return at least 0 neighbor (if all
+dimensions of `x` locate at a grid point of `grids` exactly, in other words, `x`
+is already on-grid). If `x` is outside the range of `grids`, the function will
+return 1 neighbor (the nearest boundary point in `grids`).
+
+## Tips
+
+- The function does not care about the value types of `x` and `grids`. To obtain
+the values of the neighbors, you can use `getindex.(grids, ...)` to get the
+values of the neighbors, where `...` is the indices returned by this function.
+"""
+function neighbors_2combination(
+    x    ::AbstractVector{<:Real},
+    grids::Vector{<:AbstractVector{<:Real}},
+)::Vector{Tuple}
+
+    @assert all(allunique, grids) "All grids must be unique"
+    @assert all(issorted, grids) "All grids must be ascendingly sorted"
+
+    if ongrid(x, grids)
+        # x is already on-grid, no neighbors
+        return Tuple{Vararg{Int}}[]
+    end
+
+    # bracket each element of x with the grids
+    inds = Vector{Vector{Int}}(undef, length(x))
+    for (i, xi) in enumerate(x)
+        
+        Ni = grids[i] |> length
+        
+        il,ir = locate(xi, grids[i])
+        
+        if il < 1
+            # xi is smaller than the first grid point
+            inds[i] = [1]
+        elseif ir > Ni
+            # xi is larger than the last grid point
+            inds[i] = [Ni]
+        else
+            if il == ir
+                # xi is exactly on a grid point
+                inds[i] = [il]
+            else
+                # xi is between two grid points
+                inds[i] = [il, ir]
+            end
+        end # if
+
+    end
+
+    return Iterators.product(inds...) |> collect |> vec
+end
+# ------------------------------------------------------------------------------
+"""
+    normalized_distance(
+        x1     ::AbstractVector{<:Real},
+        x2     ::AbstractVector{<:Real},
+        xscales::AbstractVector{<:Real},
+        degree ::Int = 2,
+    )w
+
+Computes the normalized distance between two D-dimensional points `x1` and `x2`,
+where `xscales` is a vector of scaling factors for each dimension which usually
+is the maximum-minimum range of the corresponding dimension.
+
+The normalized distance is then defined as the relative distance between x1 and
+x2 in a normalized space. The parameter `degree` specifies the degree of the
+Minkowski distance metric to use, with the default being 2 (Euclidean distance).
+"""
+function normalized_distance(
+    x1     ::AbstractVector{<:Real},
+    x2     ::AbstractVector{<:Real},
+    xscales::AbstractVector{<:Real} ;
+    degree ::Int = 2,
+)
+    return norm( (x1 .- x2) ./ xscales, degree )
 end
 # ------------------------------------------------------------------------------
 """
