@@ -90,3 +90,139 @@ mc = mmc.MultivariateMarkovChain(
 
 
 
+
+#=~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Young (2010) non-stochastic simulation
+
+--------------------
+## Scenario: 
+
+Controlled Markov chain Y := (X,Q,Z)
+
+where:
+
+Q  = h(X,Z)                 --> intra-period/implicit endogenous states
+X' = g(X,Q,Z)               --> endogenous states 
+Z  ~ exogenous Markov chain --> exogenous shock
+
+and (g,h) are the (decision) rules that affects the transition matrix.
+
+--------------------
+## Notes:
+
+- Any of X,Q,Z can be vector-valued.
+- `Q` transition probability is _implicit_: controlled by decision rule `(h,g)`
+  simultaneously and it is hard to directly write it. It is typically defined as
+  something "intra-period".
+- `Z` is the exogenous stochasticity that drives the randomness of the process.
+
+--------------------
+## In economics:
+
+- Many general equilibrium models that involve multiple (types of) agents fit in
+  this framework. Especially, the model features pricing mechanism that depends
+  endogenously on the interaction of these agents. e.g. two agent models, TANK
+- In such economies:
+    - X: typical aggregate state variables such as capital, asset holding
+    - Z: typical aggregate uncertainties such as TFP shock
+    - Q: equilibrium variables that
+        - depends on some endogenous stuffs (like hh's optimality conditions) 
+          but without explicit solutions. Such as bond prices that are decided
+          by the two agent's demand/supply endogenously. Such a price must clear
+          the corresponding asset market, however, the clearing condition doesnt
+          depend on the price explicitly.
+        - maximizes some equilibrium objects such as an optimal tax policy that
+          tries to maximizes the social welfare. Such a policy, by definition,
+          must be jointly pinned down with the whole equilibrium.
+- The multivariate Markov chain Y = (X,Q,Z) gives a full picture about how the
+  aggregate dynamics evolves without hiding Q from the readers as what standard
+  notations did. It is very helpful to numerical experiments.
+
+--------------------
+## Preparation for calling the API:
+
+- A decision rule `(X',Q') = f(X,Q,Z,Z')` that deicdes how the endogenous states
+  X and Q change across any two periods. The prime mark denotes "next period".
+  Here Z' is required as Q' = h(X',Z'). Practically, you can wrap an interpolant
+  or approximator with a function and pass it to the API.
+- A collection of grids for X and Q, dimension by dimension.
+- A MultivariateMarkovChain that describes the transition of Z shocks.
+
+--------------------
+## Illustrative example below:
+
+- X: 2-vector in [0,1]^2
+    - rule: Xp equals to the average of X, Q and Z (to introduce the joint depe-
+      ndence on X, Q, and Z with the least effort)
+- Z: 2-vector in [0,1]^2 
+    - rule: follows a VAR(1); WLOG, assume cov(Z) = 0 
+- Q: 2-vector in [0,1]^2
+    - rule: the max and min among today's X and Z (to introduce the joint depen-
+      dence on X and Z.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~=#
+
+# prepare grid spaces
+xgrids = [
+    LinRange(0,1, 5),
+    LinRange(0,1, 7),
+]
+qgrids = [
+    LinRange(0,1, 6),
+    LinRange(0,1, 8),
+]
+
+# prepare the Z's process
+Zproc = let
+
+    # fake a AR(1) transition matrix for one dimension of Z
+    pr = mmc.tauchen(
+        4, # no. point per dimension of Z
+        0.9, # AR(1) coefficient
+        0.1, # Std Var of the error term
+    ).probs
+    zs = [[z,] for z in LinRange(0,1, 4)]
+
+    mcZi = mmc.MultivariateMarkovChain(zs, pr, validate = true)
+
+    merge(mcZi, mcZi)
+end
+
+# prepare the mapping (X',Q') = f(X,Q,Z,Zp) which returns continous values but
+# not necessary to locate on the grid points
+ftest(X,Q,Z,Zp) = begin
+    
+    # X,Q,Z,Zp shall be vectors respectively
+
+    # step: compute X' = g(X,Q,Z)
+    Xp = (X .+ Q .+ Z) ./ 3
+
+    # step: compute Q' = h(X',Z')
+    tmpMax = max(
+        maximum(Xp),
+        maximum(Zp),
+    )
+    tmpMin = min(
+        minimum(Xp),
+        minimum(Zp),
+    )
+    Qp = [tmpMax, tmpMin]
+
+    # returns a tuple of two vector-like: Xp and Qp
+    return Xp, Qp
+end
+
+# run the algorithm
+mcY = mmc.young3(
+    ftest,
+    xgrids,
+    qgrids,
+    Zproc
+)
+
+
+
+
+
+
+
+

@@ -10,6 +10,8 @@ APPROXIMATION/DISCRETIZATION METHODS
 ===============================================================================#
 export tauchen
 export young
+export young2
+export young3
 
 
 
@@ -113,7 +115,7 @@ function young(
 end # young
 # ------------------------------------------------------------------------------
 """
-    young(
+    young2(
         fxz   ::Function,
         Zproc ::MultivariateMarkovChain,
         xgrids::Vector{<:AbstractVector}
@@ -123,9 +125,14 @@ Approximate a controlled Markov process Y = (X,Z) where Z is totally exogenous
 and X's transition depends on (X,Z) simultaneously, using Young (2010) 
 non-stochastic simulation method.
 
+```plain
 Y' = (X',Z');
 X' = f(X,Z);
 Z' ~ MarkovChain(Z)
+```
+
+This kind of controlled Markov processes are common in economics, esp. models
+with only one (type of) agents. (e.g. Krusell-Smith)
 
 The function receivs a function `fxz(X,Z)` that receives two vectors of X and Z
 respectively; a `Zproc` which is a `MultivariateMarkovChain` representing
@@ -182,7 +189,7 @@ mc_Y = mmc.young(fxz, Zproc, xgrids)
 
 ```
 """
-function young(
+function young2(
     fxz   ::Function,
     Zproc ::MultivariateMarkovChain,
     xgrids::Vector{<:AbstractVector}
@@ -332,11 +339,249 @@ end # young
 
 
 
+# ------------------------------------------------------------------------------
+"""
+    young3(
+        f     ::Function,
+        xgrids::Vector{<:AbstractVector},
+        qgrids::Vector{<:AbstractVector},
+        Zproc ::MultivariateMarkovChain,
+    )::MultivariateMarkovChain
+
+Approximate a controlled Markov process Y = (X,Q,Z) where Z is totally exogenous
+, Q is a contemporary function of (X,Z), and X's transition depends on (X,Q,Z) 
+simultaneously, using Young (2010) non-stochastic simulation method.
+
+```plain
+Y  := (X,Q,Z);
+Q  := g(X,Z);
+X' := h(X,Q,Z);
+Z' ~ MarkovChain(Z);
+stochastic function: (X',Q') = f(X,Q,Z,Z');
+
+==> controlled Markov chain: Y
+```
+
+This kind of controlled Markov processes are common in economics, esp. models
+with two or more (types of) agents in which `Q` is typically price functions,
+optimal policy functions and other equilibrium profiles that implicitly involve
+multi agent's optimality conditions. (e.g. TANK, THANK)
+
+Receives:
+
+- a function `f(X,Q,Z,Zp)` that receives three vectors of X, Q, Z, and a
+given (future) Zp respectively. The function should returns two vectors: Xp,Qp
+which represents the possible states of X and Q after transiting to the next
+period.
+- a `Zproc` which is a `MultivariateMarkovChain` representing the exogenous 
+process Z.
+- a vector of grids `xgrids` for how to discretize X.
+- a vector of grids `qgrids` for how to discretize Q.
+
+Returns a `MultivariateMarkovChain` representing the controlled process 
+Y = (X,Q,Z).
+The states are the Cartesian product of `xgrids`, `qgrids`, and the states of 
+`Zproc`.
+The transition probabilities are computed based on the mapping `f` applied to
+the states of (X,Q,Z).
+
+The returned `MultivariateMarkovChain` has a sparse transition matrix as the 
+Young's algorithm considers only the first nearest neighbors.
+
+## Notes:
+
+- the dimensions of `Zproc` is not necessarily Cartesian joined. Depends on
+how users model the exogenous process Z. ==> So this function cannot assume that
+the Zproc is Cartesian joined.
+- We do not check `f` return types as it is so limited. but we pre-alloc the 
+sized state space and try to assign (X',Q',Z'). If `fxz` returns something that 
+is incompatible with the state space, it will throw an error.
+- We require each grid in `xgrids` and `qgrids` are unique and ascendingly 
+sorted. This helps to well-define the nearest neighbor search.
+- The algorithm evaluates `f` for numerous times. Make sure it is efficient.
+Parallerization is planned. Will add later
+"""
+function young3(
+    f     ::Function,
+    xgrids::Vector{<:AbstractVector},
+    qgrids::Vector{<:AbstractVector},
+    Zproc ::MultivariateMarkovChain,
+)::MultivariateMarkovChain
+
+    #=--------------------------------------------------------------------------
+    TECH NOTES:
+
+    - the dimensions of `Zproc` is not necessarily Cartesian joined. Depends on
+      how users model the exogenous process Z. ==> So this function cannot
+      assume that the Zproc is Cartesian joined.
+      
+    - We do not check f's return types as it is so limited. but we pre-allocate
+      the sized state space and try to assign (X',Z') to it. If `f` returns
+      something that is incompatible with the state space, it will throw an
+      error.
+
+    - We require each grid in `xgrids` and `qgrids` are unique and ascendingly 
+      sorted. This helps to well-define the nearest neighbor search.
+
+    --------------------------------------------------------------------------=#
+
+    # check: dimensionality
+    Nx = length(xgrids)
+    Nq = length(qgrids)
+    Nz = ndims(Zproc)
+    @assert Nx > 0 "X grids must be non-empty."
+    @assert Nq > 0 "Q grids must be non-empty."
+    @assert Nz > 0 "Z process must be non-empty."
+
+    # check: grid sizes
+    Dx = xgrids .|> length |> prod
+    Dq = qgrids .|> length |> prod
+    Dz = length(Zproc)
+    Dy = Dx * Dq * Dz
+    @assert Dx > 0 "One or more dimension(s) of X has no grid points."
+    @assert Dq > 0 "One or more dimension(s) of Q has no grid points."
+    @assert Dz > 0 "Z process must have at least one state."
+
+    # check: x & q grids
+    @assert all(issorted,  xgrids) "All x grids must be ascendingly sorted."
+    @assert all(allunique, xgrids) "All x grids must be unique."
+    @assert all(issorted,  qgrids) "All q grids must be ascendingly sorted."
+    @assert all(allunique, qgrids) "All q grids must be unique."
+
+    # step: malloc the markov chain for Y = (X,Q,Z)
+    Ys   = Vector{Vector{Float64}}(undef, Dy)
+    PrY  = spzeros(Float64, Dy, Dy)
+
+    # step: join X, Q respectively (Z's dimensions have been defined in `Zproc`)
+    #       X and Q grids are passed as per-dimensional grids. We firstly make
+    #       them as vector grids i.e. 1 grid for X and 1 grid for Q, but either
+    #       is vector-valued
+    Xs = Iterators.product(xgrids...) |> collect
+    Qs = Iterators.product(qgrids...) |> collect
+    Zs = Zproc.states
+    
+    # step: prepare (X,Q) joint state space for finding neighbor grid points
+    xqgrids = [xgrids; qgrids]
+    XQs     = Iterators.product(xqgrids...) |> collect
+
+    # step: collect the state space for Y = (X,Q,Z), and make the indexings
+    subAllXQZ = CartesianIndices((
+        length(Xs),
+        length(Qs),
+        length(Zs),
+    ))
+    subAllXQ  = LinearIndices((
+        length(Xs),
+        length(Qs),
+    ))
+    indAllXQZ = subAllXQZ |> LinearIndices
+    indAllXQ  = subAllXQ  |> LinearIndices
+    indAllX   = LinearIndices(xgrids .|> length |> Tuple)
+    indAllQ   = LinearIndices(qgrids .|> length |> Tuple)
+
+    # step: fill the malloc-ed
+    # HINTS: we need the location of a (X,Q) point in the tensor space of (X,Q)
+    #        to compute the probs.
+    # HINTS: iy::Int, X, Q::NTuple{Nx,Float64}, Z::StaticVector{Nz,Float64}
+    for subXQZ in subAllXQZ
+
+        iX  = subXQZ[1]; X = Xs[iX] # NTuple{Nx,Float64}
+        iQ  = subXQZ[2]; Q = Qs[iQ] # NTuple{Nq,Float64}
+        iZ  = subXQZ[3]; Z = Zs[iZ] # StaticVector{Nx,Float64}
+
+        # locate: the current Y's row in the transition matrix
+        indXQZ = indAllXQZ[subXQZ]
+
+        # locate: the current Y's (X,Q) dimensions location in (X,Q) space
+        #         this is for constructing the conditional distributions later
+        subXQ = CartesianIndex(iX,iQ)
+        indXQ = indAllXQ[subXQ]
+
+        # step: fill the state space with the current Y's value (as a vector)
+        Ys[indXQZ] = Float64[X..., Q..., Z...]
+
+        # step: for every possible Z' state, eval (X',Q') = f(X,Q,Z,Z'), make
+        #       conditional distributions, then fill the transition matrix.
+        for jZp in 1:length(Zproc)
+
+            Xp, Qp = f(X,Q,Z,Zs[jZp])
+            @assert isa(Xp, AbstractVector) "f must return Xp as a vector-like"
+            @assert isa(Qp, AbstractVector) "f must return Qp as a vector-like"
+            XpQp   = Float64[Xp; Qp]
+
+            # step: find neighbor grid points for (X',Q'); get normalized dists
+            subAllXpQpNeighbors = neighbors_2combination(
+                [Xp;Qp], 
+                xqgrids
+            ) # ::Vector{NTuple{Nx+Nq,Int}}
+            XpQpNeighbors  = Vector{Float64}[
+                getindex.(xqgrids, sub)
+                for sub in subAllXpQpNeighbors
+            ]
+            ΔXpQpNeighbors = Float64[
+                normalized_distance(
+                    XpQp, 
+                    XpQpCandi,
+                    last.(xqgrids) .- first.(xqgrids)
+                )
+                for XpQpCandi in XpQpNeighbors
+            ]
+
+            # step: build conditional distribution Pr{X',Q'|X,Q,Z,Z'}
+            prXpQpGivenXQZZp::SparseVector = if length(XpQpNeighbors) == 0
+                # case: (X',Q') is exactly on the grid; no neighbors so the
+                #       density concentrates to the point itself
+                sparsevec(
+                    Int[indXQ,],   # location in (X,Q) tensor grid
+                    Float64[1.0,], # degenerated
+                    Dx * Dq,       # due to the Cartesian/tensor joinning
+                )
+            else
+                # case: (X',Q') is not on the grid; the prob split to multiple
+                #       grid points; the density is proportional to the distance
+                #       between the neighbor grid points and (X',Q').
+                # hint: needs to convert ind of (X,Q) to ind (x1,x2,...q1,q2...)
+                pr = sparsevec(
+                    Int[
+                        indAllXQ[
+                            indAllX[subXQ[1:Nx]...], 
+                            indAllQ[subXQ[Nx+1:end]...] 
+                        ]
+                        for subXQ in subAllXpQpNeighbors
+                    ],
+                    ΔXpQpNeighbors,
+                    Dx * Dq,
+                )
+                pr ./ sum(pr) # normalize to a discrete distribution density
+            end # if
 
 
+            # step: fill the corresponding (to the current Zp) columns in the
+            #       indXQZ-th row of `PrY`
+            # hint: locate the columns by `jZp`
+            # hint: Pr{X',Q'|X,Q,Z} = Pr{X',Q'|X,Q,Z,Z'} * Pr{Z'|Z}
+            # hint: not like `young2`, (X',Q') can be different by Z', so cannot
+            #       do Kronecker product but has to locate the column block (
+            #       which is a continuous range of columns by design) 
+            #       corresponding to the current Z'
+            jColStart = indAllXQZ[1,1,jZp]
+            jColEnd   = jColStart + length(prXpQpGivenXQZZp)-1
+            probZpZ   = Zproc.Pr[iZ,jZp]
+            PrY[indXQZ,jColStart:jColEnd] = probZpZ .* prXpQpGivenXQZZp
+
+        end # jZp
+
+    end # subXQZ
 
 
-
+    return MultivariateMarkovChain(
+        Ys,
+        PrY,
+        validate  = true,
+        normalize = false,
+        sparsify  = true,
+    )
+end # young3
 
 
 
