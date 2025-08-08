@@ -117,9 +117,11 @@ function neighbors_2combination(
     @assert all(allunique, grids) "All grids must be unique"
     @assert all(issorted, grids) "All grids must be ascendingly sorted"
 
+    N = x |> length
+
     if ongrid(x, grids)
         # x is already on-grid, no neighbors
-        return Tuple{Vararg{Int}}[]
+        return NTuple{N,Int}[]
     end
 
     # bracket each element of x with the grids
