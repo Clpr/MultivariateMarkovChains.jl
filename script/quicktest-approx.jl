@@ -161,18 +161,14 @@ and (g,h) are the (decision) rules that affects the transition matrix.
       dence on X and Z.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~=#
 
-mmc = include("../src/MultivariateMarkovChains.jl")
-using Profile
-using PProf
-
 # prepare grid spaces
 xgrids = [
-    LinRange(0,1, 5),
-    LinRange(0,1, 7),
+    LinRange(0,1, 10),
+    LinRange(0,1, 10),
 ]
 qgrids = [
-    LinRange(0,1, 3),
-    LinRange(0,1, 5),
+    LinRange(0,1, 10),
+    LinRange(0,1, 10),
 ]
 
 # prepare the Z's process
@@ -215,20 +211,13 @@ ftest(X,Q,Z,Zp) = begin
     return Xp, Qp
 end
 
-Profile.clear()
-
 # run the algorithm
-@profile mcY = mmc.young3(
+@time mcY = mmc.young3(
     ftest,
     xgrids,
     qgrids,
-    Zproc
+    Zproc,
+    parallel = true
 )
-
-
-pprof()
-
-
-
 
 

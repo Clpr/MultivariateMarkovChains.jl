@@ -405,7 +405,8 @@ function young3(
     f     ::Function,
     xgrids::Vector{<:AbstractVector},
     qgrids::Vector{<:AbstractVector},
-    Zproc ::MultivariateMarkovChain,
+    Zproc ::MultivariateMarkovChain ;
+    parallel::Bool = false,
 )::MultivariateMarkovChain
 
     #=--------------------------------------------------------------------------
@@ -425,157 +426,163 @@ function young3(
 
     --------------------------------------------------------------------------=#
 
-    # check: dimensionality
-    Nx = length(xgrids)
-    Nq = length(qgrids)
-    Nz = ndims(Zproc)
-    @assert Nx > 0 "X grids must be non-empty."
-    @assert Nq > 0 "Q grids must be non-empty."
-    @assert Nz > 0 "Z process must be non-empty."
+    # validation
+    @assert length(xgrids) > 0 "At least one dimension grid for X"
+    @assert length(qgrids) > 0 "At least one dimension grid for Q"
+    @assert all(
+        isvalid_grid, 
+        xgrids
+    ) "X grids must be non-empty, ascendingly sorted and unique"
+    @assert all(
+        isvalid_grid, 
+        qgrids
+    ) "Q grids must be non-empty, ascendingly sorted and unique"
 
-    # check: grid sizes
-    Dx = xgrids .|> length |> prod
-    Dq = qgrids .|> length |> prod
-    Dz = length(Zproc)
-    Dy = Dx * Dq * Dz
-    @assert Dx > 0 "One or more dimension(s) of X has no grid points."
-    @assert Dq > 0 "One or more dimension(s) of Q has no grid points."
-    @assert Dz > 0 "Z process must have at least one state."
+    # meta information
+    #=--------------------------------------------------------------------------
+    note: 2 types of index info:
+    1. a scalar element's index in a vector-valued state e.g. X,Q,Z
+    2. a vector-valued state in a grid
+    We need both to correctly construct the transition matrix.
 
-    # check: x & q grids
-    @assert all(issorted,  xgrids) "All x grids must be ascendingly sorted."
-    @assert all(allunique, xgrids) "All x grids must be unique."
-    @assert all(issorted,  qgrids) "All q grids must be ascendingly sorted."
-    @assert all(allunique, qgrids) "All q grids must be unique."
+    I use small `x`, `q`, `z` to denote the dimensions of every X,Q,Z state;
+    and use big `X`, `Q`, `Z` to denote the vector-valued state.
+    --------------------------------------------------------------------------=#
+    # dimensionality and grid size
+    DimX = length(xgrids); DimQ = length(qgrids)
 
-    # step: malloc the markov chain for Y = (X,Q,Z)
-    Ys   = Vector{Vector{Float64}}(undef, Dy)
-    PrY  = spzeros(Float64, Dy, Dy)
+    # indexings: elements in X and Q
+    subsx = CartesianIndices(xgrids .|> length |> Tuple) # DimX-D
+    subsq = CartesianIndices(qgrids .|> length |> Tuple) # DimQ-D
 
-    # step: join X, Q respectively (Z's dimensions have been defined in `Zproc`)
-    #       X and Q grids are passed as per-dimensional grids. We firstly make
-    #       them as vector grids i.e. 1 grid for X and 1 grid for Q, but either
-    #       is vector-valued
-    Xs = Iterators.product(xgrids...) |> collect
-    Qs = Iterators.product(qgrids...) |> collect
-    Zs = Zproc.states
+    # grid sizes
+    NX = subsx |> length
+    NQ = subsq |> length
+    NZ = length(Zproc)
+
+    # indexings: Y = (X,Q,Z) as vector-valued states
+    subsXQZ = CartesianIndices((NX,NQ,NZ)) # 3-D
+    indsXQZ = LinearIndices(subsXQZ)
+
+    # malloc
+    #=--------------------------------------------------------------------------
+    note: 
+    - Use IJV to construct the large sparse transition matrix in the very end,
+      Updating the transition matrix is the absolute performance bottleneck.
+    - But the states can be constructed early as it does not change.
+    - The IJV malloc-ed should accommodate the multi-threading.
+    - Every thread writes to its own IJV subvectors, so simple thread-vectors
+      work. And because IJV by definition locates everything in the transition
+      matrix, just append new subvectors.
+    --------------------------------------------------------------------------=#
+    # transition matrices; for multi-threading
+    PrIs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrJs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrVs = Vector{Float64}[Float64[] for _ in 1:Threads.nthreads()]
+
+    # (X,Q) as one vector; used in computing the conditional distributions
+    xqAll = Iterators.product(xgrids...,qgrids...) |> collect
+
+    # (X,Q) joint grids; used for computing the conditional distributions
+    xqgrids  = [xgrids;qgrids]
+    Δxqgrids = last.(xqgrids) .- first.(xqgrids)
+    indsxq   = LinearIndices((xqgrids .|> length) |> Tuple)
+    indsXQ   = LinearIndices((NX,NQ))
     
-    # step: prepare (X,Q) joint state space for finding neighbor grid points
-    xqgrids = [xgrids; qgrids]
-    XQs     = Iterators.product(xqgrids...) |> collect
+    # Y = (X,Q,Z) states; stacked
+    YAll = hcat(
+        kron(ones(NZ), stack(xqAll |> vec, dims = 1)),
+        kron(stack(Zproc.states, dims = 1), ones(NX * NQ))
+    )
 
-    # step: collect the state space for Y = (X,Q,Z), and make the indexings
-    subAllXQZ = CartesianIndices((
-        length(Xs),
-        length(Qs),
-        length(Zs),
-    ))
-    subAllXQ  = LinearIndices((
-        length(Xs),
-        length(Qs),
-    ))
-    indAllXQZ = subAllXQZ |> LinearIndices
-    indAllXQ  = subAllXQ  |> LinearIndices
-    indAllX   = LinearIndices(xgrids .|> length |> Tuple)
-    indAllQ   = LinearIndices(qgrids .|> length |> Tuple)
-
-    # step: fill the malloc-ed
+    # step: fill the malloc-ed sparse transition matrix
     # HINTS: we need the location of a (X,Q) point in the tensor space of (X,Q)
     #        to compute the probs.
     # HINTS: iy::Int, X, Q::NTuple{Nx,Float64}, Z::StaticVector{Nz,Float64}
-    for subXQZ in subAllXQZ
+    @maybe_threads parallel for subXQZ in subsXQZ
 
-        iX  = subXQZ[1]; X = Xs[iX] # NTuple{Nx,Float64}
-        iQ  = subXQZ[2]; Q = Qs[iQ] # NTuple{Nq,Float64}
-        iZ  = subXQZ[3]; Z = Zs[iZ] # StaticVector{Nx,Float64}
+        tid = Threads.threadid()
 
-        # locate: the current Y's row in the transition matrix
-        indXQZ = indAllXQZ[subXQZ]
+        # which row in the transition matrix?
+        iX = subXQZ[1]
+        iQ = subXQZ[2]
+        iZ = subXQZ[3]
+        indXQZ = indsXQZ[subXQZ]
 
-        # locate: the current Y's (X,Q) dimensions location in (X,Q) space
-        #         this is for constructing the conditional distributions later
-        subXQ = CartesianIndex(iX,iQ)
-        indXQ = indAllXQ[subXQ]
-
-        # step: fill the state space with the current Y's value (as a vector)
-        Ys[indXQZ] = Float64[X..., Q..., Z...]
+        # which (X,Q) joint vector (DimX+DimQ dims) in the grid?
+        xq    = YAll[indXQZ,1:(DimX+DimQ)]
+        indXQ = indsXQ[iX,iQ]
 
         # step: for every possible Z' state, eval (X',Q') = f(X,Q,Z,Z'), make
         #       conditional distributions, then fill the transition matrix.
-        for jZp in 1:length(Zproc)
+        for jZp in 1:NZ
 
-            Xp, Qp = f(X,Q,Z,Zs[jZp])
-            @assert isa(Xp, AbstractVector) "f must return Xp as a vector-like"
-            @assert isa(Qp, AbstractVector) "f must return Qp as a vector-like"
-            XpQp   = Float64[Xp; Qp]
+            # eval: (X',Q') = f(X,Q,Z,Zp)
+            xp,qp = f(
+                xq[1:DimX],
+                xq[DimX+1:end],
+                Zproc.states[iZ],
+                Zproc.states[jZp],
+            )
+            xpqp = [xp;qp] # length: DimX + DimQ
 
-            # step: find neighbor grid points for (X',Q'); get normalized dists
-            subAllXpQpNeighbors = neighbors_2combination(
-                [Xp;Qp], 
-                xqgrids
-            ) # ::Vector{NTuple{Nx+Nq,Int}}
-            XpQpNeighbors  = Vector{Float64}[
-                getindex.(xqgrids, sub)
-                for sub in subAllXpQpNeighbors
-            ]
-            ΔXpQpNeighbors = Float64[
-                normalized_distance(
-                    XpQp, 
-                    XpQpCandi,
-                    last.(xqgrids) .- first.(xqgrids)
-                )
-                for XpQpCandi in XpQpNeighbors
+            # find neighbor grid points for (X',Q') as vector of sub tuples
+            subsXpQpNeighbors = neighbors_2combination(xpqp, xqgrids)
+
+            # materialize the neighbor points for computing the distances
+            XpQpNeighbors = Vector{Float64}[
+                getindex.(xqgrids,subAsTup) 
+                for subAsTup in subsXpQpNeighbors
             ]
 
-            # step: build conditional distribution Pr{X',Q'|X,Q,Z,Z'}
-            prXpQpGivenXQZZp::SparseVector = if length(XpQpNeighbors) == 0
+            # compute the normalized distances
+            Δs = Float64[
+                normalized_distance(xpqp, xpqp_candi, Δxqgrids)
+                for xpqp_candi in XpQpNeighbors
+            ]
+
+            # build conditional distribution Pr{X',Q'|X,Q,Z,Z'}
+            # note: the column locations `JsCondi` are in the (X,Q) grid
+            JsCondi, VsCondi = if length(XpQpNeighbors) == 0
                 # case: (X',Q') is exactly on the grid; no neighbors so the
                 #       density concentrates to the point itself
-                sparsevec(
-                    Int[indXQ,],   # location in (X,Q) tensor grid
-                    Float64[1.0,], # degenerated
-                    Dx * Dq,       # due to the Cartesian/tensor joinning
-                )
+                Int[indXQ,], Float64[1.0,]
             else
                 # case: (X',Q') is not on the grid; the prob split to multiple
                 #       grid points; the density is proportional to the distance
                 #       between the neighbor grid points and (X',Q').
                 # hint: needs to convert ind of (X,Q) to ind (x1,x2,...q1,q2...)
-                pr = sparsevec(
-                    Int[
-                        indAllXQ[
-                            indAllX[subXQ[1:Nx]...], 
-                            indAllQ[subXQ[Nx+1:end]...] 
-                        ]
-                        for subXQ in subAllXpQpNeighbors
-                    ],
-                    ΔXpQpNeighbors,
-                    Dx * Dq,
-                )
-                pr ./ sum(pr) # normalize to a discrete distribution density
+                _Js = Int[
+                    indsxq[CartesianIndex(subxq)]
+                    for subxq in subsXpQpNeighbors
+                ]
+
+                _Js, Δs ./ sum(Δs)
             end # if
 
+            # convert the conditional distributions to the unconditional ones
+            JsCondi .+= indsXQZ[1,1,jZp] - 1
+            VsCondi .*= Zproc.Pr[iZ,jZp]
 
-            # step: fill the corresponding (to the current Zp) columns in the
-            #       indXQZ-th row of `PrY`
-            # hint: locate the columns by `jZp`
-            # hint: Pr{X',Q'|X,Q,Z} = Pr{X',Q'|X,Q,Z,Z'} * Pr{Z'|Z}
-            # hint: not like `young2`, (X',Q') can be different by Z', so cannot
-            #       do Kronecker product but has to locate the column block (
-            #       which is a continuous range of columns by design) 
-            #       corresponding to the current Z'
-            jColStart = indAllXQZ[1,1,jZp]
-            jColEnd   = jColStart + length(prXpQpGivenXQZZp)-1
-            probZpZ   = Zproc.Pr[iZ,jZp]
-            PrY[indXQZ,jColStart:jColEnd] = probZpZ .* prXpQpGivenXQZZp
+            # push
+            append!(PrIs[tid], fill(indXQZ, JsCondi |> length))
+            append!(PrJs[tid], JsCondi)
+            append!(PrVs[tid], VsCondi)
 
         end # jZp
-
     end # subXQZ
 
+    # build the sparse transition matrix
+    PrY = sparse(
+        reduce(vcat,PrIs),
+        reduce(vcat,PrJs),
+        reduce(vcat,PrVs),
+        size(YAll,1),
+        size(YAll,1),
+    )
 
     return MultivariateMarkovChain(
-        Ys,
+        YAll |> eachrow,
         PrY,
         validate  = true,
         normalize = false,
