@@ -40,6 +40,23 @@ function ongrid(
 end
 # ------------------------------------------------------------------------------
 """
+    isvalid_grid(grid::AbstractVector)
+
+Check if a numeric vector `grid` is a unique, ascendingly sorted, non-empty grid
+"""
+function isvalid_grid(grid::AbstractVector)::Bool
+    if isempty(grid)
+        return false
+    elseif !issorted(grid)
+        return false
+    elseif !allunique(grid)
+        return false
+    else
+        return true
+    end
+end
+# ------------------------------------------------------------------------------
+"""
     locate(x::Real, xsorted::AbstractVector) -> NTuple{2,Int}
 
 Finds the indices of the two neighboring elements in the sorted vector `xsorted`
