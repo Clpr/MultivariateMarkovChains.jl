@@ -14,6 +14,23 @@ export isstationary
 
 
 # ------------------------------------------------------------------------------
+"""
+    maybe_threads(flag::Bool, expr::Expr)
+
+Wrap an expression `expr` with `Threads.@threads` macro if `flag` is `true`.
+
+Usage: `@maybe_threads true for i in .....`
+"""
+macro maybe_threads(flag, expr)
+    quote
+        if $(flag)
+            Threads.@threads $expr
+        else
+            $expr
+        end
+    end |> esc
+end # maybe_threads
+# ------------------------------------------------------------------------------
 function issquare(m::AbstractMatrix)::Bool
     # check if a matrix is square
     return size(m, 1) == size(m, 2)
