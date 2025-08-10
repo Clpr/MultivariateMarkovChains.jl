@@ -161,14 +161,18 @@ and (g,h) are the (decision) rules that affects the transition matrix.
       dence on X and Z.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~=#
 
+mmc = include("../src/MultivariateMarkovChains.jl")
+using Profile
+using PProf
+
 # prepare grid spaces
 xgrids = [
     LinRange(0,1, 5),
     LinRange(0,1, 7),
 ]
 qgrids = [
-    LinRange(0,1, 6),
-    LinRange(0,1, 8),
+    LinRange(0,1, 3),
+    LinRange(0,1, 5),
 ]
 
 # prepare the Z's process
@@ -176,11 +180,11 @@ Zproc = let
 
     # fake a AR(1) transition matrix for one dimension of Z
     pr = mmc.tauchen(
-        4, # no. point per dimension of Z
+        3, # no. point per dimension of Z
         0.9, # AR(1) coefficient
         0.1, # Std Var of the error term
     ).probs
-    zs = [[z,] for z in LinRange(0,1, 4)]
+    zs = [[z,] for z in LinRange(0,1, pr |> size |> first)]
 
     mcZi = mmc.MultivariateMarkovChain(zs, pr, validate = true)
 
@@ -211,8 +215,10 @@ ftest(X,Q,Z,Zp) = begin
     return Xp, Qp
 end
 
+Profile.clear()
+
 # run the algorithm
-mcY = mmc.young3(
+@profile mcY = mmc.young3(
     ftest,
     xgrids,
     qgrids,
@@ -220,7 +226,7 @@ mcY = mmc.young3(
 )
 
 
-
+pprof()
 
 
 
