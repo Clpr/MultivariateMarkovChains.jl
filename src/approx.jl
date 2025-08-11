@@ -52,7 +52,7 @@ end # tauchen
 # Young (2010) non-stochastic simulation
 # ==============================================================================
 """
-    young(
+    young1(
         f2fit ::Function,
         grids ::Vector{<:AbstractVector};
     )::MultivariateMarkovChain
@@ -82,7 +82,7 @@ Economic Dynamics and Control 34, no. 1 (2010): 36–41.
 
 https://doi.org/10.1016/j.jedc.2008.11.010.
 """
-function young(
+function young1(
     f2fit ::Function,
     grids ::Vector{<:AbstractVector};
 )::MultivariateMarkovChain
@@ -112,7 +112,7 @@ function young(
         validate  = true,
         normalize = true,
     )
-end # young
+end # young1
 # ------------------------------------------------------------------------------
 """
     young2(
@@ -154,45 +154,12 @@ Make sure `fxz` is efficient, especially if the grids are large.
 - `fxz` should allow `Z` be a `StaticVector`. This is for performance reasons,
 as `Zproc` stores states as `StaticVector`s. Extra type conversions may slow
 down the process.
-
-## Example
-
-```julia
-import MultivariateMarkovChains as mmc
-
-# define exognous process Z
-Zproc = mmc.MultivariateMarkovChain(
-    [[1,1],[2,1],[1,2],[2,2]],
-    [
-        0.81  0.09  0.09  0.01;
-        0.09  0.81  0.01  0.09;
-        0.09  0.01  0.81  0.09;
-        0.01  0.09  0.09  0.81;
-    ]
-)
-
-# define endogenous/controlled states X = (x1,x2), x1 ∈ [0,2], x2 ∈ [0,10]
-xgrids = [
-    LinRange(0,2,30),
-    LinRange(0,10,30),
-]
-
-# define a mapping X' = f(X,Z); use sqrt for simplicity
-fxz(X,Z) = begin
-    x1p = clamp(sqrt(X[1]*Z[1]), 0, 2)
-    x2p = clamp(sqrt(X[2]*Z[2]), 0, 10)
-    return [x1p, x2p]
-end
-
-# Run Young's algorithm
-mc_Y = mmc.young(fxz, Zproc, xgrids)
-
-```
 """
 function young2(
-    fxz   ::Function,
-    Zproc ::MultivariateMarkovChain,
-    xgrids::Vector{<:AbstractVector}
+    f     ::Function,
+    xgrids::Vector{<:AbstractVector},
+    Zproc ::MultivariateMarkovChain;
+    parallel::Bool = false,
 )::MultivariateMarkovChain
 
     #=--------------------------------------------------------------------------
@@ -207,138 +174,141 @@ function young2(
       something that is incompatible with the state space, it will throw an
       error.
 
-    - We use the knowledge about the ordering of: `Iterators.product(a,b)`
-
-    [
-        1      1;
-        2      1;
-        3      1;
-        .      .;
-        .      .;
-        Na     1;
-        1      2;
-        2      2;
-        3      2;
-        .      .;
-        .      .;
-        Na-1  Nb;
-        Na    Nb;
-    ]
-
-    To assign values to the transition matrix.
-
     - We require each grid in `xgrids` are unique and ascendingly sorted. This
       helps to well-define the nearest neighbor search.
-
     --------------------------------------------------------------------------=#
 
-    # check: dimensionality
-    Nx = length(xgrids)
-    Nz = ndims(Zproc)
-    @assert Nx > 0 "X grids must be non-empty."
-    @assert Nz > 0 "Z process must be non-empty."
+    # validation
+    @assert length(xgrids) > 0 "At least one dimension grid for X"
+    @assert all(
+        isvalid_grid,
+        xgrids
+    ) "X grids must be non-empty, ascendingly sorted and unique"
 
-    # check: grid sizes
-    Dx = xgrids .|> length |> prod
-    Dz = length(Zproc)
-    Dy = Dx * Dz
-    @assert Dx > 0 "One or more dimension(s) of X has no grid points."
-    @assert Dz > 0 "Z process must have at least one state."
+    # meta information
+    #=--------------------------------------------------------------------------
+    note: 2 types of index info:
+    1. a scalar element's index in a vector-valued state e.g. X,Z
+    2. a vector-valued state in a grid
+    We need both to correctly construct the transition matrix.
 
-    # check: x grids
-    @assert all(issorted, xgrids) "All xgrids must be ascendingly sorted."
-    @assert all(allunique, xgrids) "All xgrids must be unique."
+    I use small `x`, `z` to denote the dimensions of every X,Z state;
+    and use big `X`, `Z` to denote the vector-valued state.
+    --------------------------------------------------------------------------=#
+    # dimensionality and grid size
+    DimX = length(xgrids)
 
+    # indexings: elements in X
+    subsx = CartesianIndices(xgrids .|> length |> Tuple) # DimX-D
+    indsx = LinearIndices(subsx)
 
-    # step: malloc the markov chain for Y = (X,Z)
-    Ystates = Vector{Vector{Float64}}(undef, Dy)
-    PrY     = spzeros(Float64, Dy, Dy)
+    # grid sizes
+    NX = subsx |> length
+    NZ = length(Zproc)
 
-    # step: collect the state space for Y = (X,Z), and make the indexing mats
-    Xtensor = Iterators.product(xgrids...)
-    Ytensor = Iterators.product(Xtensor, Zproc.states)
-    XZsub   = CartesianIndices((Dx,Dz))
-    Xind    = LinearIndices(ntuple(
-        i -> length(xgrids[i]),
-        length(xgrids)
-    ))
-    
+    # indexings: Y = (X,Z) as vector-valued states
+    subsXZ = CartesianIndices((NX,NZ)) # 2-D
+    indsXZ = LinearIndices(subsXZ)
 
-    # step: fill the malloc-ed
-    # HINTS: we need the location of `X` in `Xtensor` to compute the probs
-    # HINTS: iy::Int, X::NTuple{Nx,Float64}, Z::StaticVector{Nz,Float64}
-    for (iy,(X,Z)) in Ytensor |> enumerate
+    # malloc
+    #=--------------------------------------------------------------------------
+    note: 
+    - Use IJV to construct the large sparse transition matrix in the very end,
+      Updating the transition matrix is the absolute performance bottleneck.
+    --------------------------------------------------------------------------=#
+    # transition matrices; for multi-threading
+    PrIs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrJs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrVs = Vector{Float64}[Float64[] for _ in 1:Threads.nthreads()]
 
-        # step: fill the state
-        Ystates[iy] = Float64[X..., Z...]
+    # X grids; used for computing the conditional distributions
+    xAll    = Iterators.product(xgrids...) |> collect
+    Δxgrids = last.(xgrids) .- first.(xgrids)
+    indsx   = LinearIndices(xgrids .|> length |> Tuple)
 
-        # step: evaluate X' = f(X,Z)
-        Xp::Vector{Float64} = fxz(X |> collect, Z) |> collect
+    # Y = (X,Z) states; stacked
+    YAll = hcat(
+        kron(ones(NZ), stack(xAll |> vec, dims = 1)),
+        kron(stack(Zproc.states, dims = 1), ones(NX))
+    )
 
-        # step: locate (X,Z) in their own grids
-        ix = XZsub[iy][1]
-        iz = XZsub[iy][2]
+    # step: fill the malloc-ed sparse transition matrix
+    # HINTS: need the location of a X point in the space of X to compute probs.
+    @maybe_threads parallel for subXZ in subsXZ
 
-        # step: find neighbor grid points for X'; compute normalized distances
-        Xp_neighbors_sub = neighbors_2combination(Xp, xgrids)
-        Xp_neighbors = [
-            getindex.(xgrids, sub)
-            for sub in Xp_neighbors_sub
+        tid = Threads.threadid()
+
+        # which row in the transition matrix?
+        iX = subXZ[1]
+        iZ = subXZ[2]
+        indXZ = indsXZ[subXZ]
+
+        # which (X,Q) joint vector (DimX+DimQ dims) in the grid?
+        x = YAll[indXZ,1:DimX]
+
+        # eval: (X',Q') = f(X,Q,Z,Zp)
+        xp = f(x, Zproc.states[iZ])
+
+        # make conditional distribution Pr{X'|X,Z,Z'}
+        # hint: this distribution is the same for all possible Z'; we will use
+        #       kronecker product to broadcast it to the whole row of the trans
+        #       matrix.
+        subsXpNeighbors = neighbors_2combination(xp, xgrids)
+        XpNeighbors = Vector{Float64}[
+            getindex.(xgrids,subAsTup)
+            for subAsTup in subsXpNeighbors
         ]
-        ΔXp_neighbors = [
-            normalized_distance(Xp, x, last.(xgrids) .- first.(xgrids)) 
-            for x in Xp_neighbors
+        Δs = Float64[
+            normalized_distance(xp, xp_candi, Δxgrids)
+            for xp_candi in XpNeighbors
         ]
-        
-        # step: build conditional distribution
-        # Pr{X'|X,Z,Z'}, same across all Z' states; length is Dx
-        PrXp_givenXZZp = if length(Xp_neighbors) == 0
-            # (X,Z) is exactly on-grid, no neighbors, so the density concentrate
-            sparsevec(Int[ix], Float64[1.0], Dx)
+        JsCondi, VsCondi = if length(XpNeighbors) == 0
+            # case: X' is exactly on the grid; no neighbors so the density
+            #      concentrates and the distribution degenerates
+            Int[iX,], Float64[1.0]
         else
-            pr = sparsevec(
-                Int[
-                    Xind[xsub...]
-                    for xsub in Xp_neighbors_sub
-                ],
-                ΔXp_neighbors,
-                Dx
+            _Js = Int[
+                indsx[CartesianIndex(subAsTup)]
+                for subAsTup in subsXpNeighbors
+            ]
+            _Js, Δs ./ sum(Δs)
+        end # if
+
+        # step: build the unconditional distribution Pr{X'|X,Z}
+        # hint: Pr{X'|X,Z,Z'} * Pr{Z'|Z}
+        # hint: use Kronecker product to conveniently do broadcasting
+        append!(PrIs[tid], fill(indXZ, (JsCondi |> length) * NZ))
+        append!(
+            PrJs[tid], 
+            reduce(
+                vcat,
+                Vector{Int}[
+                    JsCondi .+ (j - 1) .* NX
+                    for j in 1:NZ
+                ]
             )
-            pr ./ sum(pr) # normalize
-        end
-
-        # step: fill the corresponding columns in the `iy`-th row of PrY
-        # HINT: locate the columns by `iz`
-        # HINT: Pr{X'|X,Z} = Pr{X'|X,Z,Z'} * Pr{Z'|Z}
-        # HINT: use Kronecker/tensor product to broadcast the probabilities
-        PrY[iy,:] = kron(
-            Zproc.Pr[iz,:],
-            PrXp_givenXZZp
         )
+        append!(PrVs[tid], kron(Zproc.Pr[iZ,:], VsCondi))
 
-    end # (iy,(X,Z))
+    end # subXZ
+
+    # build the sparse transition matrix
+    PrY = sparse(
+        reduce(vcat,PrIs),
+        reduce(vcat,PrJs),
+        reduce(vcat,PrVs),
+        size(YAll,1),
+        size(YAll,1),
+    )
 
     return MultivariateMarkovChain(
-        Ystates,
+        YAll |> eachrow,
         PrY,
         validate  = true,
         normalize = false,
         sparsify  = true,
     )
-end # young
-
-
-
-
-
-
-
-
-
-
-
-
-
+end # young2
 # ------------------------------------------------------------------------------
 """
     young3(

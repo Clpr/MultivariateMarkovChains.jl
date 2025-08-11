@@ -24,69 +24,172 @@ mmc.tauchen(
 )
 
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+#=~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Young (2010) non-stochastic simulation
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# an example 2-D operator mapping continuous vector states to the same space
-# e.g. consider [0,1]^2 space for simplicity
-# e.g. do flipping around (0.5,0.5) for example
-f2fit(X) = clamp.([1.0 - X[1], 1.0 - X[2]], 0.0, 1.0)
+--------------------
+## Scenario: 
 
-# design grids for discretizing the continuous state space
-grids = [
-    LinRange(0,1,11), # 11 points in the first dimension
-    LinRange(0,1,21), # 21 points in the second dimension
+Deterministic continuous mapping that decides how a state X transits to X'
+
+where:
+
+X' = f(X) --> endogenous states 
+
+and f is the (decision) rules that affects the transition matrix.
+
+--------------------
+## Notes:
+
+- X can be vector-valued.
+- No stochasticity. `f` defines a deterministic system.
+
+--------------------
+## In economics:
+
+- Many economies without uncertainty fits into this idea.
+- Compared with gridize the function `f`, approximating it with a Markov chain
+  provides some degrees of boudned rationality, which might be interesting in
+  studying precautionary behaviors.
+
+--------------------
+## Preparation for calling the API:
+
+- A decision rule `X' = f(X)` that deicdes how the endogenous states X change 
+  across any two periods. The prime mark denotes "next period". Practically, you
+  can wrap an interpolant or approximator with a function and pass it to the API
+- A collection of grids for X, dimension by dimension.
+
+--------------------
+## Illustrative example below:
+
+- X: 2-vector in [0,1]^2
+    - rule: Xp equals to the average of X, Q and Z (to introduce the joint depe-
+      ndence on X, Q, and Z with the least effort)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~=#
+
+# prepare grid spaces
+xgrids = [
+    LinRange(0,1, 10),
+    LinRange(0,1, 10),
 ]
 
-# style 1: let the package do the work
-# returns a `MultivariateMarkovChain{2}` with 11*21 = 231 states
-mc = mmc.young(
-    f2fit, # the operator mapping
-    grids, # the grids for discretization
+
+# prepare the mapping X' = f(X) which returns continous values but
+# not necessary to locate on the grid points
+ftest(X) = begin
+    
+    # step: compute X' = f(X,Z)
+    Xp = sqrt.(X)
+
+    return Xp
+end
+
+# run the algorithm; parallization is available
+@time mcY = mmc.young1(ftest, xgrids)
+
+
+
+
+
+#=~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Young (2010) non-stochastic simulation
+
+--------------------
+## Scenario: 
+
+Controlled Markov chain Y := (X,Z)
+
+where:
+
+X' = f(X,Z)               --> endogenous states 
+Z  ~ exogenous Markov chain --> exogenous shock
+
+and f is the (decision) rules that affects the transition matrix.
+
+--------------------
+## Notes:
+
+- Any of X,Z can be vector-valued.
+- `Z` is the exogenous stochasticity that drives the randomness of the process.
+
+--------------------
+## In economics:
+
+- Many general equilibrium models that has similar structure such as the famous 
+  Krusell-Smith model. Especially, all endogenous states can be explicitly upda-
+  ted.
+- In such economies:
+    - X: typical aggregate state variables such as capital, asset holding
+    - Z: typical aggregate uncertainties such as TFP shock
+- The multivariate Markov chain Y = (X,Z) gives a full picture about how the
+  aggregate dynamics evolves.
+
+--------------------
+## Preparation for calling the API:
+
+- A decision rule `X' = f(X,Z)` that deicdes how the endogenous states X change 
+  across any two periods. The prime mark denotes "next period". Practically, you
+  can wrap an interpolant or approximator with a function and pass it to the API
+- A collection of grids for X, dimension by dimension.
+- A MultivariateMarkovChain that describes the transition of Z shocks.
+
+--------------------
+## Illustrative example below:
+
+- X: 2-vector in [0,1]^2
+    - rule: Xp equals to the average of X, Q and Z (to introduce the joint depe-
+      ndence on X, Q, and Z with the least effort)
+- Z: 2-vector in [0,1]^2 
+    - rule: follows a VAR(1); WLOG, assume cov(Z) = 0 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~=#
+
+# prepare grid spaces
+xgrids = [
+    LinRange(0,1, 10),
+    LinRange(0,1, 10),
+]
+
+# prepare the Z's process
+Zproc = let
+
+    # fake a AR(1) transition matrix for one dimension of Z
+    pr = mmc.tauchen(
+        3, # no. point per dimension of Z
+        0.9, # AR(1) coefficient
+        0.1, # Std Var of the error term
+    ).probs
+    zs = [[z,] for z in LinRange(0,1, pr |> size |> first)]
+
+    mcZi = mmc.MultivariateMarkovChain(zs, pr, validate = true)
+
+    merge(mcZi, mcZi)
+end
+
+# prepare the mapping X' = f(X,Z) which returns continous values but
+# not necessary to locate on the grid points
+ftest(X,Z) = begin
+    
+    # X,Z shall be vectors respectively
+
+    # step: compute X' = f(X,Z)
+    Xp = (X .+ Z) ./ 2
+
+    return Xp
+end
+
+# run the algorithm; parallization is available
+@time mcY = mmc.young2(
+    ftest,
+    xgrids,
+    Zproc,
+    parallel = false
 )
 
-# style 2: break down the steps and control more details
-# returns a NamedTuple of `states` and `probs` which can be used to construct 
-# a `MultivariateMarkovChain`
-
-# step 2.1: evaluate the operator for every grid point, Cartesian/tensor joined
-# and stack the results for convenience
-Xthis = Iterators.product(grids...) |> collect .|> collect |> vec
-Xnext = [f2fit(xy) for xy in Xthis] |> stack
-
-# step 2.2: gridize/snap the next states to the grids; each dimension has its own grid
-Xnext_gridized = [
-    [x1,x2]
-    for (x1,x2) in zip(
-        grids[1][mmc.gridize(Xnext[1,:], grids[1])],
-        grids[2][mmc.gridize(Xnext[2,:], grids[2])],
-    )
-]
-
-# step 2.3: count the frequency of state transitions
-# tips: use DataStructures.Counter
-freqs = mmc.DataStructures.counter(Xthis .=> Xnext_gridized)
-
-# step 2.4: construct the transition probability matrix
-Pr = Float64[
-    freqs[xi => xj]
-    for (xi,xj) in Iterators.product(Xthis,Xthis)
-]
-# Pr |> mmc.sparse # (optional) check the sparsity pattern
-Pr ./= sum(Pr, dims = 2) # normalize the rows to sum to 1
 
 
-# step 2.5: construct the `MultivariateMarkovChain`
-mc = mmc.MultivariateMarkovChain(
-    Xthis, # the states
-    Pr,    # the transition probability matrix
-    validate  = true, # validate the transition probabilities
-    normalize = true, # normalize the rows to sum to 1
-)
-
-# Then, if the mapping `f2fit` is stochastic, one should merge the constructed
-# `MultivariateMarkovChain` with the Markov chain of the stochastic states.
 
 
 
@@ -211,7 +314,7 @@ ftest(X,Q,Z,Zp) = begin
     return Xp, Qp
 end
 
-# run the algorithm
+# run the algorithm; parallization is available
 @time mcY = mmc.young3(
     ftest,
     xgrids,
