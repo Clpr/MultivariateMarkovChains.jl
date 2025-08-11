@@ -83,42 +83,87 @@ Economic Dynamics and Control 34, no. 1 (2010): 36–41.
 https://doi.org/10.1016/j.jedc.2008.11.010.
 """
 function young1(
-    f2fit ::Function,
-    grids ::Vector{<:AbstractVector};
+    f     ::Function,
+    xgrids::Vector{<:AbstractVector};
+    parallel::Bool = false,
 )::MultivariateMarkovChain
 
-    # step 1: construct the Cartesian space
-    Xthis = Iterators.product(grids...) |> collect .|> collect |> vec
+    subsx = CartesianIndices(xgrids .|> length |> Tuple)
+    indsx = LinearIndices(subsx)
+    NX    = subsx |> length
 
-    # step 2: eval the operator for every grid point
-    Xnext = [f2fit(xy) for xy in Xthis]
+    # transition matrices; for multi-threading
+    PrIs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrJs = Vector{Int}[Int[] for _ in 1:Threads.nthreads()]
+    PrVs = Vector{Float64}[Float64[] for _ in 1:Threads.nthreads()]
 
-    # step 3: gridize/snap the next states to the grids
-    Xnext_gridized = gridize(Xnext, grids)[1]
+    # X grids; used for computing the conditional distributions
+    xAll    = Iterators.product(xgrids...) |> collect .|> collect |> vec
+    Δxgrids = last.(xgrids) .- first.(xgrids)
 
-    # step 4: count the frequency of state transitions
-    freqs = DataStructures.counter(Xthis .=> Xnext_gridized)
+    # step: fill the malloc-ed sparse transition matrix
+    @maybe_threads parallel for iX in 1:NX
 
-    # step 5: construct the transition matrix
-    Pr = Float64[
-        freqs[xi => xj]
-        for (xi,xj) in Iterators.product(Xthis,Xthis)
-    ]
-    Pr ./= sum(Pr, dims = 2) # row-wise normalize
+        tid = Threads.threadid()
+
+        # eval: X' = f(X)
+        xp = f(xAll[iX])
+
+        # make conditional distribution Pr{X'|X}
+        subsXpNeighbors = neighbors_2combination(xp, xgrids)
+        XpNeighbors = Vector{Float64}[
+            getindex.(xgrids,subAsTup)
+            for subAsTup in subsXpNeighbors
+        ]
+        Δs = Float64[
+            normalized_distance(xp, xp_candi, Δxgrids)
+            for xp_candi in XpNeighbors
+        ]
+        JsCondi, VsCondi = if length(XpNeighbors) == 0
+            # case: X' is exactly on the grid; no neighbors so the density
+            #      concentrates and the distribution degenerates
+            Int[iX,], Float64[1.0]
+        else
+            _Js = Int[
+                indsx[CartesianIndex(subAsTup)]
+                for subAsTup in subsXpNeighbors
+            ]
+            _Js, Δs ./ sum(Δs)
+        end # if
+
+        # step: build the unconditional distribution Pr{X'|X}
+        # hint: Pr{X'|X,Z,Z'} * Pr{Z'|Z}
+        # hint: use Kronecker product to conveniently do broadcasting
+        append!(PrIs[tid], fill(iX, JsCondi |> length))
+        append!(PrJs[tid], JsCondi)
+        append!(PrVs[tid], VsCondi)
+
+    end # iX
+
+    # build the sparse transition matrix
+    PrX = sparse(
+        reduce(vcat,PrIs),
+        reduce(vcat,PrJs),
+        reduce(vcat,PrVs),
+        xAll |> length,
+        xAll |> length,
+    )
 
     return MultivariateMarkovChain(
-        Xthis,
-        Pr,
+        xAll,
+        PrX,
         validate  = true,
-        normalize = true,
+        normalize = false,
+        sparsify  = true,
     )
 end # young1
 # ------------------------------------------------------------------------------
 """
     young2(
-        fxz   ::Function,
-        Zproc ::MultivariateMarkovChain,
-        xgrids::Vector{<:AbstractVector}
+        f     ::Function,
+        xgrids::Vector{<:AbstractVector},
+        Zproc ::MultivariateMarkovChain;
+        parallel::Bool = false,
     )::MultivariateMarkovChain
 
 Approximate a controlled Markov process Y = (X,Z) where Z is totally exogenous
@@ -246,7 +291,7 @@ function young2(
         # which (X,Q) joint vector (DimX+DimQ dims) in the grid?
         x = YAll[indXZ,1:DimX]
 
-        # eval: (X',Q') = f(X,Q,Z,Zp)
+        # eval: X' = f(X,Z)
         xp = f(x, Zproc.states[iZ])
 
         # make conditional distribution Pr{X'|X,Z,Z'}
@@ -315,7 +360,8 @@ end # young2
         f     ::Function,
         xgrids::Vector{<:AbstractVector},
         qgrids::Vector{<:AbstractVector},
-        Zproc ::MultivariateMarkovChain,
+        Zproc ::MultivariateMarkovChain ;
+        parallel::Bool = false,
     )::MultivariateMarkovChain
 
 Approximate a controlled Markov process Y = (X,Q,Z) where Z is totally exogenous

@@ -72,8 +72,8 @@ and f is the (decision) rules that affects the transition matrix.
 
 # prepare grid spaces
 xgrids = [
-    LinRange(0,1, 10),
-    LinRange(0,1, 10),
+    LinRange(0,1, 100),
+    LinRange(0,1, 100),
 ]
 
 
@@ -88,7 +88,7 @@ ftest(X) = begin
 end
 
 # run the algorithm; parallization is available
-@time mcY = mmc.young1(ftest, xgrids)
+@time mcY = mmc.young1(ftest, xgrids, parallel = true)
 
 
 
