@@ -280,6 +280,12 @@ is outside the range of `xGrid`, it is mapped to the nearest boundary element
 of `xGrid`.
 
 The `xGrid` must be a unique vector but not necessarily sorted.
+
+NOTES:
+- This helper function is actually not used but maybe in the future. The current
+implementation is a O(N^2) complex which is inefficient (just for quick doing).
+The correct algorithm is element-wise bisection searchs which is O(N*log(N));
+for uniform grids, use simple index arithmatics which is O(1).
 """
 function gridize(
     Xs   ::AbstractVector{M}, 
